@@ -1,0 +1,218 @@
+services:
+  # ============================================================
+  # Development: source mounted, cargo-watch hot reload
+  # ============================================================
+  cdn-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+      - "8443:8443"
+      - "9090:9090"
+    volumes:
+      - ..:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/app/target
+    environment:
+      - RUST_LOG=info
+      - CARGO_HOME=/usr/local/cargo
+      - CDN_NODE_ID=dev-node-01
+      - CDN_NODE_LABELS=region:local,tier:dev
+      - CDN_ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - CDN_ETCD_PREFIX=/nozdormu
+      - CDN_REDIS_MODE=sentinel
+      - CDN_REDIS_SENTINEL_MASTER=mymaster
+      - CDN_REDIS_SENTINELS=sentinel1:26379,sentinel2:26379,sentinel3:26379
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      redis-master:
+        condition: service_healthy
+    profiles:
+      - dev
+
+  # ============================================================
+  # Production: multi-stage build
+  # ============================================================
+  cdn-proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ../config:/app/config:ro
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    profiles:
+      - prod
+
+  # ============================================================
+  # etcd cluster (3 nodes)
+  # ============================================================
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.17
+    environment:
+      - ETCD_NAME=etcd1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_AUTO_COMPACTION_RETENTION=1h
+      - ETCD_AUTO_COMPACTION_MODE=periodic
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd1-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - dev
+      - infra
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.17
+    environment:
+      - ETCD_NAME=etcd2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    volumes:
+      - etcd2-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - dev
+      - infra
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.17
+    environment:
+      - ETCD_NAME=etcd3
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    volumes:
+      - etcd3-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - dev
+      - infra
+
+  # ============================================================
+  # Redis Sentinel cluster (1 master + 1 slave + 3 sentinels)
+  # ============================================================
+  redis-master:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-master-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    profiles:
+      - dev
+      - infra
+
+  redis-slave:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --replicaof redis-master 6379
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - redis-slave-data:/data
+    profiles:
+      - dev
+      - infra
+
+  sentinel1:
+    image: redis:7-alpine
+    command: >
+      sh -c 'cat > /tmp/sentinel.conf <<EOF
+      sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 10000
+      sentinel parallel-syncs mymaster 1
+      EOF
+      redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    profiles:
+      - dev
+      - infra
+
+  sentinel2:
+    image: redis:7-alpine
+    command: >
+      sh -c 'cat > /tmp/sentinel.conf <<EOF
+      sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 10000
+      sentinel parallel-syncs mymaster 1
+      EOF
+      redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    profiles:
+      - dev
+      - infra
+
+  sentinel3:
+    image: redis:7-alpine
+    command: >
+      sh -c 'cat > /tmp/sentinel.conf <<EOF
+      sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 10000
+      sentinel parallel-syncs mymaster 1
+      EOF
+      redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    profiles:
+      - dev
+      - infra
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  target-cache:
+  etcd1-data:
+  etcd2-data:
+  etcd3-data:
+  redis-master-data:
+  redis-slave-data:

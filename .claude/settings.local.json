@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_episodic-memory_episodic-memory__search",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:crates.io)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:blog.cloudflare.com)",
+      "Bash(curl -sL https://raw.githubusercontent.com/cloudflare/pingora/main/pingora/Cargo.toml)",
+      "Bash(curl -sL https://raw.githubusercontent.com/cloudflare/pingora/main/Cargo.toml)",
+      "Bash(curl -sL https://raw.githubusercontent.com/cloudflare/pingora/main/pingora-proxy/src/lib.rs)",
+      "Bash(curl:*)",
+      "Bash(python3 -c \"import sys,json; [print\\(f[''''name'''']\\) for f in json.loads\\(sys.stdin.read\\(\\)\\)]\")",
+      "WebFetch(domain:etcd.io)",
+      "WebFetch(domain:lib.rs)",
+      "WebFetch(domain:pingora.io)",
+      "Bash(python3 -c \"import sys,json; [print\\(f[''''name''''], f[''''type'''']\\) for f in json.loads\\(sys.stdin.read\\(\\)\\)]\")",
+      "Bash(python3 -c \":*)",
+      "Bash(python3:*)",
+      "Bash(python3 -c \"print\\(''test''\\)\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(python -c \"print\\(''test''\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(find /c/Users/user/Desktop/Nozdormu -type d -name pingora*)",
+      "Bash(python -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(n[''''path'''']\\) for n in data[''''tree''''] if n[''''type'''']==''''blob'''' and n[''''path''''].startswith\\(''''pingora-proxy/''''\\)]\")",
+      "Bash(gh search:*)",
+      "Bash(gh issue:*)",
+      "WebFetch(domain:apisix.apache.org)",
+      "WebFetch(domain:openresty.org)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "Bash(cargo check:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

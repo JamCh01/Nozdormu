@@ -1,0 +1,32 @@
+---
+# Pingora server configuration
+version: 1
+threads: 4
+pid_file: /tmp/nozdormu-cdn.pid
+error_log: /tmp/nozdormu-cdn-error.log
+upgrade_sock: /tmp/nozdormu-cdn.sock
+
+# CDN configuration
+cdn:
+  # Listener address
+  listen: "0.0.0.0:6188"
+
+  # Prometheus metrics endpoint
+  metrics_listen: "0.0.0.0:6190"
+
+  # Upstream backends
+  upstreams:
+    - address: "1.1.1.1:443"
+      tls: true
+      sni: "one.one.one.one"
+    - address: "1.0.0.1:443"
+      tls: true
+      sni: "one.one.one.one"
+
+  # Health check settings
+  health_check:
+    interval_secs: 10
+    type: tcp
+
+  # Load balancing algorithm: round_robin | ketama
+  load_balancing: round_robin

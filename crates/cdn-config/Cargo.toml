@@ -1,0 +1,16 @@
+[package]
+name = "cdn-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cdn-common = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+etcd-client = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,24 @@
+- [Nozdormu CDN Overview](project_overview.md) — Pingora 0.8 CDN, 5-crate workspace, OpenSSL, WSL/Docker dev
+- [Architecture Decisions](architecture_decisions.md) — 已确认: etcd+Redis存储, 全局共享+选择器, 缓存Redis+OSS, Admin API三层, 端口/crate
+- [Product Roadmap](product_roadmap.md) — 商业CDN差距分析, 三级优先级功能规划, 策略: 先迁移后扩展
+- [Site Config Schema](site_config_schema.md) — SiteConfig 完整结构: domains/origins/LB/protocol/SSL/cache/WAF/CC
+- [Dependency Summary](dependency_summary.md) — 全部 Rust crate 依赖清单, 按用途和 crate 分配
+- [Migration Mapping](migration_mapping.md) — OpenResty→Pingora 完整映射: 阶段/缓存/限流/插件/路由
+- [OpenResty Ecosystem](openresty_ecosystem.md) — 架构, 请求阶段, lua-resty 库→Rust 映射
+- [APISIX Architecture](apisix_architecture.md) — 插件系统, 路由匹配, 上游管理, etcd, SSL, Admin API
+- [Protocol Proxying Guide](protocol_proxy_guide.md) — HTTP/HTTPS/WS/WSS/SSE/gRPC Pingora 代理配置
+- [Pingora Dynamic Config](pingora_dynamic_config.md) — ServiceDiscovery/BackgroundService/ArcSwap 模式
+- [etcd Integration](etcd_integration.md) — etcd-client, key 层级, watch, 节点注册, 部署
+- [Redis Integration](redis_integration.md) — redis crate, 限流 Lua, pub/sub, Streams
+- [Ch3: Routing](ch3_routing_design.md) — 域名匹配, ProxyCtx 上下文, 各阶段数据流
+- [Ch4: WAF](ch4_waf_design.md) — 6步检查链, ipnet/maxminddb, block/log, Prometheus
+- [Ch5: CC](ch5_cc_design.md) — 混合计数器, 规则匹配, JS挑战, block/challenge/log
+- [Ch6: Redirect](ch6_redirect_design.md) — 三级跳转, 4种URL匹配, 变量替换, ACME排除
+- [Ch7: Protocol Proxy](ch7_protocol_proxy_design.md) — 协议检测, 6 location→1 upstream_peer, L4 Stream
+- [Ch8: Load Balancing](ch8_load_balancing_design.md) — LB算法, 健康检查, DNS缓存, 备用源站, 重试
+- [Ch9: Cache](ch9_cache_design.md) — 策略/key/Redis+OSS存储/响应收集/异步写入
+- [Ch10: SSL/TLS](ch10_ssl_tls_design.md) — 动态证书, ACME多提供商, HTTP-01挑战, 自动续期
+- [Ch11: Headers](ch11_header_processing.md) — 请求/响应头规则, 变量替换, 敏感头移除
+- [Ch12: Logging](ch12_logging_monitoring.md) — Redis Streams日志, Prometheus指标体系, 健康/状态端点
+- [Ch13-14: Utils+MultiNode](ch13_14_utils_multinode.md) — Redis连接/IP工具/分布式锁/标签选择器/健康同步
+- [Ch15: Admin API](ch15_admin_api.md) — 三层访问控制, Axum本地管理, 公开+内网端点

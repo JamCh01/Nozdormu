@@ -1,0 +1,41 @@
+[package]
+name = "cdn-proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cdn-proxy"
+path = "src/main.rs"
+
+[dependencies]
+cdn-common = { workspace = true }
+cdn-config = { workspace = true }
+cdn-cache = { workspace = true }
+cdn-middleware = { workspace = true }
+pingora = { workspace = true }
+async-trait = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+once_cell = { workspace = true }
+arc-swap = { workspace = true }
+prometheus = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+redis = { workspace = true }
+moka = { workspace = true }
+dashmap = { workspace = true }
+uuid = { workspace = true }
+axum = { workspace = true }
+instant-acme = { workspace = true }
+x509-parser = { workspace = true }
+hickory-resolver = { workspace = true }
+ring = { workspace = true }
+base64 = { workspace = true }
+reqwest = { workspace = true }
+ipnet = { workspace = true }
+chrono = { workspace = true }
+
+[target.'cfg(not(windows))'.dependencies]
+jemallocator = "0.5"

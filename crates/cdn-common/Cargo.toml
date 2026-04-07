@@ -1,0 +1,16 @@
+[package]
+name = "cdn-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+ipnet = { workspace = true }
+chrono = { workspace = true }
