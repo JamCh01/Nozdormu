@@ -74,10 +74,6 @@ struct CdnOpt {
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     log_level: String,
-
-    /// Proxy listen address (e.g. 0.0.0.0:6188)
-    #[arg(long)]
-    listen: Option<String>,
 }
 
 fn main() {
@@ -137,7 +133,6 @@ fn main() {
     node_config.print_summary();
 
     // ── 3. Pingora server bootstrap ──
-    let listen_override = cdn_opt.listen;
     let config_path = cdn_opt
         .pingora
         .conf
@@ -254,7 +249,9 @@ fn main() {
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
-    let listen_addr = listen_override
+    let listen_addr = node_config
+        .proxy
+        .listen
         .as_deref()
         .unwrap_or(&cdn_config.listen);
     proxy_service.add_tcp(listen_addr);
