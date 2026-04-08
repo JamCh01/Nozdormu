@@ -82,10 +82,12 @@ pub fn validate_site_config(config: &SiteConfig) -> Vec<ValidationError> {
         });
     }
 
-    // protocol.redirect_code
-    if !matches!(config.protocol.redirect_code, 301 | 302 | 303 | 307 | 308) {
+    // protocol.force_https.redirect_code
+    if config.protocol.force_https.enable
+        && !matches!(config.protocol.force_https.redirect_code, 301 | 302 | 303 | 307 | 308)
+    {
         errors.push(ValidationError {
-            path: "protocol.redirect_code".to_string(),
+            path: "protocol.force_https.redirect_code".to_string(),
             message: "must be one of: 301, 302, 303, 307, 308".to_string(),
         });
     }

@@ -150,6 +150,7 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
 {
   "site_id": "example",
   "enabled": true,
+  "port": 80,
   "domains": ["example.com", "*.example.com"],
   "origins": [
     {
@@ -189,8 +190,8 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
     ]
   },
   "protocol": {
-    "force_https": true,
-    "websocket": true,
+    "force_https": { "enable": true, "https_port": 443, "redirect_code": 301 },
+    "websocket": { "enable": true },
     "grpc": { "enabled": true }
   },
   "compression": {

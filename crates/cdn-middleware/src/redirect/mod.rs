@@ -2,7 +2,7 @@ pub mod domain;
 pub mod protocol;
 pub mod url;
 
-use cdn_common::{DomainRedirectConfig, ProtocolConfig, UrlRedirectRule};
+use cdn_common::{DomainRedirectConfig, ForceHttpsConfig, UrlRedirectRule};
 use std::collections::HashMap;
 
 /// Unified redirect result from the three-tier engine.
@@ -34,7 +34,7 @@ pub fn check_redirect(
     query_string: Option<&str>,
     method: &str,
     domain_redirect: Option<&DomainRedirectConfig>,
-    protocol_config: &ProtocolConfig,
+    force_https: &ForceHttpsConfig,
     url_rules: &[UrlRedirectRule],
 ) -> Option<RedirectResult> {
     // ── Tier 1: Domain redirect ──
@@ -51,7 +51,7 @@ pub fn check_redirect(
     }
 
     // ── Tier 2: Protocol redirect ──
-    if let Some(result) = protocol::check_protocol_redirect(scheme, host, uri, protocol_config) {
+    if let Some(result) = protocol::check_protocol_redirect(scheme, host, uri, force_https) {
         return Some(RedirectResult {
             target_url: result.target_url,
             status_code: result.status_code,

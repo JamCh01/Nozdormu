@@ -1,6 +1,7 @@
 {
   "site_id": "protocol",
   "enabled": true,
+  "port": 80,
   "domains": ["protocol.cdn.jam114514.me"],
   "origins": [
     {
@@ -12,15 +13,17 @@
     }
   ],
   "protocol": {
-    "force_https": true,
-    "redirect_code": 301,
+    "force_https": {
+      "enable": true,
+      "redirect_code": 301,
+      "exclude_paths": ["/health", "/api/webhook"]
+    },
     "http2": true,
-    "websocket": true,
-    "sse": true,
+    "websocket": { "enable": true },
+    "sse": { "enable": true },
     "grpc": {
       "enabled": false
-    },
-    "https_exclude_paths": ["/health", "/api/webhook"]
+    }
   },
   "waf": { "enabled": false },
   "cc": { "enabled": false },

@@ -1,4 +1,4 @@
-use cdn_common::ProtocolConfig;
+use cdn_common::ForceHttpsConfig;
 
 /// Result of a protocol redirect check.
 pub struct ProtocolRedirectResult {
@@ -6,19 +6,27 @@ pub struct ProtocolRedirectResult {
     pub status_code: u16,
 }
 
-/// Check if the request should be redirected for protocol enforcement (HTTP→HTTPS or HTTPS→HTTP).
+/// Check if the request should be redirected for protocol enforcement (HTTP→HTTPS).
 ///
 /// Rules:
 /// - ACME challenge paths are always excluded (avoid cert issuance deadlock)
-/// - `https_exclude_paths` are excluded
-/// - force_https + force_http both set → HTTPS wins
+/// - `exclude_paths` are excluded
 /// - Non-standard ports are preserved in the redirect URL
 pub fn check_protocol_redirect(
     scheme: &str,
     host: &str,
     uri: &str,
-    config: &ProtocolConfig,
+    config: &ForceHttpsConfig,
 ) -> Option<ProtocolRedirectResult> {
+    if !config.enable {
+        return None;
+    }
+
+    // Already on HTTPS
+    if scheme == "https" {
+        return None;
+    }
+
     let path = uri.split('?').next().unwrap_or(uri);
 
     // ACME challenge paths are always excluded
@@ -27,41 +35,23 @@ pub fn check_protocol_redirect(
     }
 
     // Check exclude paths
-    for exclude in &config.https_exclude_paths {
+    for exclude in &config.exclude_paths {
         if path.starts_with(exclude.as_str()) {
             return None;
         }
     }
 
-    // Determine desired scheme
-    let target_scheme = if config.force_https {
-        "https"
-    } else if config.force_http {
-        "http"
-    } else {
-        return None; // No protocol enforcement
-    };
-
-    // Already on the correct scheme
-    if scheme == target_scheme {
-        return None;
-    }
-
     // Build redirect URL
     // Strip port from host, then add the target port if non-standard
     let host_no_port = host.split(':').next().unwrap_or(host);
-    let target_url = if target_scheme == "https" {
-        if let Some(port) = config.https_port {
-            if port != 443 {
-                format!("{}://{}:{}{}", target_scheme, host_no_port, port, uri)
-            } else {
-                format!("{}://{}{}", target_scheme, host_no_port, uri)
-            }
+    let target_url = if let Some(port) = config.https_port {
+        if port != 443 {
+            format!("https://{}:{}{}", host_no_port, port, uri)
         } else {
-            format!("{}://{}{}", target_scheme, host_no_port, uri)
+            format!("https://{}{}", host_no_port, uri)
         }
     } else {
-        format!("{}://{}{}", target_scheme, host_no_port, uri)
+        format!("https://{}{}", host_no_port, uri)
     };
 
     Some(ProtocolRedirectResult {
@@ -74,9 +64,9 @@ pub fn check_protocol_redirect(
 mod tests {
     use super::*;
 
-    fn config_https() -> ProtocolConfig {
-        ProtocolConfig {
-            force_https: true,
+    fn config_https() -> ForceHttpsConfig {
+        ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
             ..Default::default()
         }
@@ -84,7 +74,7 @@ mod tests {
 
     #[test]
     fn test_no_enforcement() {
-        let cfg = ProtocolConfig::default();
+        let cfg = ForceHttpsConfig::default();
         assert!(check_protocol_redirect("http", "example.com", "/path", &cfg).is_none());
     }
 
@@ -116,10 +106,10 @@ mod tests {
 
     #[test]
     fn test_exclude_paths() {
-        let cfg = ProtocolConfig {
-            force_https: true,
+        let cfg = ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
-            https_exclude_paths: vec!["/api/webhook".to_string()],
+            exclude_paths: vec!["/api/webhook".to_string()],
             ..Default::default()
         };
         assert!(
@@ -133,33 +123,9 @@ mod tests {
     }
 
     #[test]
-    fn test_force_http() {
-        let cfg = ProtocolConfig {
-            force_http: true,
-            redirect_code: 302,
-            ..Default::default()
-        };
-        let result = check_protocol_redirect("https", "example.com", "/path", &cfg).unwrap();
-        assert_eq!(result.target_url, "http://example.com/path");
-        assert_eq!(result.status_code, 302);
-    }
-
-    #[test]
-    fn test_both_force_https_wins() {
-        let cfg = ProtocolConfig {
-            force_https: true,
-            force_http: true,
-            redirect_code: 301,
-            ..Default::default()
-        };
-        let result = check_protocol_redirect("http", "example.com", "/", &cfg).unwrap();
-        assert_eq!(result.target_url, "https://example.com/");
-    }
-
-    #[test]
     fn test_non_standard_port() {
-        let cfg = ProtocolConfig {
-            force_https: true,
+        let cfg = ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
             https_port: Some(8443),
             ..Default::default()
@@ -170,8 +136,8 @@ mod tests {
 
     #[test]
     fn test_standard_port_not_shown() {
-        let cfg = ProtocolConfig {
-            force_https: true,
+        let cfg = ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
             https_port: Some(443),
             ..Default::default()
@@ -186,5 +152,16 @@ mod tests {
         let result =
             check_protocol_redirect("http", "example.com:8080", "/path", &cfg).unwrap();
         assert_eq!(result.target_url, "https://example.com/path");
+    }
+
+    #[test]
+    fn test_custom_redirect_code() {
+        let cfg = ForceHttpsConfig {
+            enable: true,
+            redirect_code: 302,
+            ..Default::default()
+        };
+        let result = check_protocol_redirect("http", "example.com", "/", &cfg).unwrap();
+        assert_eq!(result.status_code, 302);
     }
 }

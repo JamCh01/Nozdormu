@@ -26,14 +26,14 @@ pub fn detect_protocol(session: &Session, config: &ProtocolConfig) -> ProtocolTy
     }
 
     // ── 2. WebSocket detection ──
-    if config.websocket {
+    if config.websocket.enable {
         if is_websocket_upgrade(session) {
             return ProtocolType::WebSocket;
         }
     }
 
     // ── 3. SSE detection ──
-    if config.sse {
+    if config.sse.enable {
         if let Some(accept) = headers.get("accept").and_then(|v| v.to_str().ok()) {
             if accept.contains("text/event-stream") {
                 return ProtocolType::Sse;

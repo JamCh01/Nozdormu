@@ -131,6 +131,7 @@ mod tests {
         SiteConfig {
             site_id: id.to_string(),
             enabled: true,
+            port: 80,
             domains: domains.into_iter().map(|s| s.to_string()).collect(),
             target_labels: Vec::new(),
             origins: vec![OriginConfig {

@@ -172,7 +172,7 @@ mod cc_integration {
 }
 
 mod redirect_integration {
-    use cdn_common::{DomainRedirectConfig, ProtocolConfig, UrlRedirectRule, UrlRuleType};
+    use cdn_common::{DomainRedirectConfig, ForceHttpsConfig, UrlRedirectRule, UrlRuleType};
     use cdn_middleware::redirect;
     use std::collections::HashMap;
 
@@ -184,8 +184,8 @@ mod redirect_integration {
             source_domains: vec![],
             status_code: 301,
         };
-        let protocol = ProtocolConfig {
-            force_https: true,
+        let force_https = ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
             ..Default::default()
         };
@@ -193,7 +193,7 @@ mod redirect_integration {
         // Domain redirect has higher priority than protocol redirect
         let result = redirect::check_redirect(
             "http", "old.example.com", "/path", "/path", None, "GET",
-            Some(&domain_redirect), &protocol, &[],
+            Some(&domain_redirect), &force_https, &[],
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::Domain));
@@ -202,15 +202,15 @@ mod redirect_integration {
 
     #[test]
     fn test_protocol_redirect_when_no_domain() {
-        let protocol = ProtocolConfig {
-            force_https: true,
+        let force_https = ForceHttpsConfig {
+            enable: true,
             redirect_code: 301,
             ..Default::default()
         };
 
         let result = redirect::check_redirect(
             "http", "example.com", "/path", "/path", None, "GET",
-            None, &protocol, &[],
+            None, &force_https, &[],
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::Protocol));
@@ -219,7 +219,7 @@ mod redirect_integration {
 
     #[test]
     fn test_url_rule_redirect() {
-        let protocol = ProtocolConfig::default();
+        let force_https = ForceHttpsConfig::default();
         let rules = vec![UrlRedirectRule {
             r#type: UrlRuleType::Prefix,
             source: Some("/old/".to_string()),
@@ -237,7 +237,7 @@ mod redirect_integration {
 
         let result = redirect::check_redirect(
             "https", "example.com", "/old/page?q=1", "/old/page", Some("q=1"), "GET",
-            None, &protocol, &rules,
+            None, &force_https, &rules,
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::UrlRule));
@@ -247,10 +247,10 @@ mod redirect_integration {
 
     #[test]
     fn test_no_redirect() {
-        let protocol = ProtocolConfig::default();
+        let force_https = ForceHttpsConfig::default();
         let result = redirect::check_redirect(
             "https", "example.com", "/path", "/path", None, "GET",
-            None, &protocol, &[],
+            None, &force_https, &[],
         );
         assert!(result.is_none());
     }

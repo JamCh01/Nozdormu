@@ -273,7 +273,7 @@ impl ProxyHttp for CdnProxy {
                 query_string,
                 method,
                 site.domain_redirect.as_ref(),
-                &site.protocol,
+                &site.protocol.force_https,
                 &site.url_redirect_rules,
             ) {
                 return self

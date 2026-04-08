@@ -10,6 +10,9 @@ pub struct SiteConfig {
     pub site_id: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Site listen port (used for routing; the global listener must cover this port)
+    #[serde(default = "default_port")]
+    pub port: u16,
     pub domains: Vec<String>,
     #[serde(default)]
     pub target_labels: Vec<String>,
@@ -41,12 +44,6 @@ pub struct SiteConfig {
 impl SiteConfig {
     /// Log warnings for contradictory or suspicious configuration.
     pub fn warn_invalid(&self) {
-        if self.protocol.force_https && self.protocol.force_http {
-            log::warn!(
-                "[Config] site '{}': force_https and force_http both true, force_https takes precedence",
-                self.site_id
-            );
-        }
         if self.domains.is_empty() && self.enabled {
             log::warn!("[Config] site '{}': enabled but has no domains", self.site_id);
         }
@@ -170,38 +167,73 @@ pub enum HealthCheckType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolConfig {
     #[serde(default)]
-    pub force_https: bool,
-    #[serde(default)]
-    pub force_http: bool,
-    #[serde(default = "default_redirect_code")]
-    pub redirect_code: u16,
+    pub force_https: ForceHttpsConfig,
     #[serde(default = "default_true")]
     pub http2: bool,
     #[serde(default)]
-    pub websocket: bool,
+    pub websocket: WebSocketConfig,
     #[serde(default)]
-    pub sse: bool,
+    pub sse: SseConfig,
     #[serde(default)]
     pub grpc: GrpcConfig,
-    #[serde(default)]
-    pub https_exclude_paths: Vec<String>,
-    #[serde(default)]
-    pub https_port: Option<u16>,
 }
 
 impl Default for ProtocolConfig {
     fn default() -> Self {
         Self {
-            force_https: false,
-            force_http: false,
-            redirect_code: default_redirect_code(),
+            force_https: ForceHttpsConfig::default(),
             http2: true,
-            websocket: false,
-            sse: false,
+            websocket: WebSocketConfig::default(),
+            sse: SseConfig::default(),
             grpc: GrpcConfig::default(),
-            https_exclude_paths: Vec::new(),
-            https_port: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForceHttpsConfig {
+    #[serde(default)]
+    pub enable: bool,
+    #[serde(default = "default_redirect_code")]
+    pub redirect_code: u16,
+    #[serde(default)]
+    pub https_port: Option<u16>,
+    #[serde(default)]
+    pub exclude_paths: Vec<String>,
+}
+
+impl Default for ForceHttpsConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            redirect_code: default_redirect_code(),
+            https_port: None,
+            exclude_paths: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketConfig {
+    #[serde(default)]
+    pub enable: bool,
+}
+
+impl Default for WebSocketConfig {
+    fn default() -> Self {
+        Self { enable: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SseConfig {
+    #[serde(default)]
+    pub enable: bool,
+}
+
+impl Default for SseConfig {
+    fn default() -> Self {
+        Self { enable: false }
     }
 }
 
