@@ -249,13 +249,8 @@ fn main() {
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
-    let listen_addr = node_config
-        .proxy
-        .listen
-        .as_deref()
-        .unwrap_or(&cdn_config.listen);
-    proxy_service.add_tcp(listen_addr);
-    log::info!("proxy listening on {}", listen_addr);
+    proxy_service.add_tcp(&cdn_config.listen);
+    log::info!("proxy listening on {}", cdn_config.listen);
 
     // ── 7. Prometheus metrics ──
     let mut prometheus_service = ListeningService::prometheus_http_service();

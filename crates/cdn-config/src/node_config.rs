@@ -851,9 +851,6 @@ impl BalancerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyTimeoutConfig {
-    /// Proxy listen address (e.g. "0.0.0.0:6188")
-    #[serde(default)]
-    pub listen: Option<String>,
     pub connect_timeout: u64,
     pub send_timeout: u64,
     pub read_timeout: u64,
@@ -865,7 +862,6 @@ pub struct ProxyTimeoutConfig {
 impl Default for ProxyTimeoutConfig {
     fn default() -> Self {
         Self {
-            listen: None,
             connect_timeout: 10,
             send_timeout: 60,
             read_timeout: 60,
@@ -879,7 +875,6 @@ impl Default for ProxyTimeoutConfig {
 impl ProxyTimeoutConfig {
     fn from_env() -> Self {
         Self {
-            listen: env_or_none("CDN_LISTEN"),
             connect_timeout: env_u64("CDN_PROXY_CONNECT_TIMEOUT", 10),
             send_timeout: env_u64("CDN_PROXY_SEND_TIMEOUT", 60),
             read_timeout: env_u64("CDN_PROXY_READ_TIMEOUT", 60),
@@ -892,11 +887,6 @@ impl ProxyTimeoutConfig {
     pub(crate) fn from_etcd_with_env_override(base: Option<&Self>) -> Self {
         let d = base.cloned().unwrap_or_default();
         Self {
-            listen: if env_is_set("CDN_LISTEN") {
-                env_or_none("CDN_LISTEN")
-            } else {
-                d.listen
-            },
             connect_timeout: if env_is_set("CDN_PROXY_CONNECT_TIMEOUT") {
                 env_u64("CDN_PROXY_CONNECT_TIMEOUT", 10)
             } else {
