@@ -120,26 +120,22 @@ fuser -k 6188/tcp 2>/dev/null || true
 fuser -k 6190/tcp 2>/dev/null || true
 sleep 0.5
 
-export CDN_NODE_ID=test-node-01
-export CDN_NODE_LABELS=""
-export CDN_ENV=development
-export CDN_ETCD_ENDPOINTS=http://127.0.0.1:2379
-export CDN_ETCD_PREFIX=/nozdormu
-export CDN_GEOIP_PATH=/opt/geo
-export CDN_CERT_PATH=/tmp/nozdormu-certs
-export CDN_LOG_PATH=/tmp/nozdormu-logs
-export CDN_CC_CHALLENGE_SECRET=test_e2e_secret_key_12345
-export CDN_REDIS_MODE=standalone
-export CDN_REDIS_HOST=127.0.0.1
-export CDN_REDIS_PORT=6379
-export CDN_TRUSTED_PROXIES=127.0.0.0/8
-export CDN_LOG_PUSH_REDIS=false
-export CDN_COMPRESSION_ENABLED=false
-export RUST_LOG=info
-
 mkdir -p /tmp/nozdormu-certs /tmp/nozdormu-logs
 
-"$PROJECT_DIR/target/release/cdn-proxy" -c "$PROJECT_DIR/config/test.yaml" &
+export RUST_LOG=info
+
+"$PROJECT_DIR/target/release/cdn-proxy" \
+    -c "$PROJECT_DIR/config/test.yaml" \
+    --node-id test-node-01 \
+    --node-labels "" \
+    --env development \
+    --etcd-endpoints http://127.0.0.1:2379 \
+    --etcd-prefix /nozdormu \
+    --geoip-path /opt/geo \
+    --cert-path /tmp/nozdormu-certs \
+    --log-path /tmp/nozdormu-logs \
+    --cc-challenge-secret test_e2e_secret_key_12345 \
+    --log-level info &
 PROXY_PID=$!
 echo "$PROXY_PID" >> "$PIDS_FILE"
 echo "  Proxy PID: $PROXY_PID"

@@ -106,6 +106,37 @@ impl NodeConfig {
         }
     }
 
+    /// Build NodeConfig from CLI bootstrap values + etcd global config.
+    ///
+    /// Bootstrap configs (node, etcd, paths) come from CLI args.
+    /// Cluster-shared configs use etcd as base with env override.
+    /// `cc_challenge_secret` overrides the security config value from CLI.
+    pub fn from_etcd_and_cli(
+        global: &crate::global_config::GlobalConfig,
+        bootstrap: &BootstrapConfig,
+        cc_challenge_secret: String,
+    ) -> Self {
+        let mut security =
+            SecurityConfig::from_etcd_with_env_override(global.security.as_ref());
+        security.cc_challenge_secret = cc_challenge_secret;
+
+        Self {
+            node: bootstrap.node.clone(),
+            etcd: bootstrap.etcd.clone(),
+            paths: bootstrap.paths.clone(),
+            redis: RedisConfig::from_etcd_with_env_override(global.redis.as_ref()),
+            security,
+            balancer: BalancerConfig::from_etcd_with_env_override(global.balancer.as_ref()),
+            proxy: ProxyTimeoutConfig::from_etcd_with_env_override(global.proxy.as_ref()),
+            cache_oss: CacheOssConfig::from_etcd_with_env_override(global.cache.as_ref()),
+            ssl: SslAcmeConfig::from_etcd_with_env_override(global.ssl.as_ref()),
+            log: LogConfig::from_etcd_with_env_override(global.logging.as_ref()),
+            compression: compression_from_etcd_with_env_override(
+                global.compression.as_ref(),
+            ),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
@@ -171,6 +202,15 @@ impl NodeInfo {
             env: env_or("CDN_ENV", "development"),
         }
     }
+
+    pub fn from_cli(id: String, labels_str: String, env: String) -> Self {
+        let labels = labels_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        Self { id, labels, env }
+    }
 }
 
 // ============================================================
@@ -194,6 +234,20 @@ impl BootstrapConfig {
             etcd: EtcdConfig::from_env(),
             paths: PathsConfig::from_env(),
             log_level: env_or("CDN_LOG_LEVEL", "info"),
+        }
+    }
+
+    pub fn from_cli(
+        node: NodeInfo,
+        etcd: EtcdConfig,
+        paths: PathsConfig,
+        log_level: String,
+    ) -> Self {
+        Self {
+            node,
+            etcd,
+            paths,
+            log_level,
         }
     }
 }
@@ -423,6 +477,27 @@ impl EtcdConfig {
             username: env_or_none("CDN_ETCD_USERNAME"),
             password: env_or_none("CDN_ETCD_PASSWORD"),
             connect_timeout_ms: env_u64("CDN_ETCD_CONNECT_TIMEOUT", 5000),
+        }
+    }
+
+    pub fn from_cli(
+        endpoints_str: String,
+        prefix: String,
+        username: Option<String>,
+        password: Option<String>,
+        connect_timeout_ms: u64,
+    ) -> Self {
+        let endpoints: Vec<String> = endpoints_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        Self {
+            endpoints,
+            prefix,
+            username,
+            password,
+            connect_timeout_ms,
         }
     }
 }
@@ -1036,6 +1111,10 @@ impl PathsConfig {
             geoip: env_or("CDN_GEOIP_PATH", "/etc/nozdormu/geoip"),
             logs: env_or("CDN_LOG_PATH", "/var/log/nozdormu"),
         }
+    }
+
+    pub fn from_cli(certs: String, geoip: String, logs: String) -> Self {
+        Self { certs, geoip, logs }
     }
 }
 

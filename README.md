@@ -4,7 +4,7 @@ High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudfl
 
 ## Features
 
-- **Dynamic Configuration** -- Site configs and cluster-shared settings stored in etcd, hot-reloaded via ArcSwap with zero downtime; env vars override etcd for per-node control
+- **Dynamic Configuration** -- Site configs and cluster-shared settings stored in etcd, hot-reloaded via ArcSwap with zero downtime; bootstrap params via CLI flags, env vars override etcd for per-node control
 - **WAF** -- IP/CIDR whitelist/blacklist (prefix trie O(log n)), GeoIP country/region/ASN filtering, fail-closed country whitelist
 - **Rate Limiting (CC)** -- Hybrid local+Redis counters, JS challenge (HMAC-SHA256), per-path rules with longest-prefix matching
 - **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance
@@ -59,9 +59,6 @@ Client -> Pingora Listener
 ### Docker (recommended)
 
 ```bash
-# Copy and edit environment config
-cp .env.example .env
-
 # Start everything (CDN + etcd cluster + Redis Sentinel)
 docker compose --profile dev up
 
@@ -80,8 +77,8 @@ docker compose --profile infra up -d
 
 # Build and run
 cargo build --release
-RUST_LOG=info CDN_ENV=development \
-  ./target/release/cdn-proxy -c config/default.yaml
+./target/release/cdn-proxy -c config/default.yaml \
+  --env development --log-level info
 ```
 
 ### Verify
@@ -100,19 +97,19 @@ curl http://localhost:8080/upstream/health
 
 ## Configuration
 
-Nozdormu uses a three-tier configuration system with priority: **env var > etcd > default**.
+Nozdormu uses a three-tier configuration system with priority: **CLI arg > etcd > default**.
 
-### Tier 1: Bootstrap (Environment Variables Only)
+### Tier 1: Bootstrap (CLI Arguments)
 
-These are required before etcd is available and are always read from env. See [`.env.example`](.env.example).
+These are required before etcd is available and are passed via command-line flags. Run `cdn-proxy --help` for the full list.
 
-| Category | Key Variables |
-|----------|-------------|
-| Node Identity | `CDN_NODE_ID`, `CDN_NODE_LABELS`, `CDN_ENV` |
-| etcd | `CDN_ETCD_ENDPOINTS`, `CDN_ETCD_PREFIX`, `CDN_ETCD_USERNAME` |
-| Paths | `CDN_CERT_PATH`, `CDN_GEOIP_PATH`, `CDN_LOG_PATH` |
-| Log Level | `CDN_LOG_LEVEL`, `RUST_LOG` |
-| Secrets | `CDN_CC_CHALLENGE_SECRET` (required in production) |
+| Category | CLI Flags |
+|----------|-----------|
+| Node Identity | `--node-id`, `--node-labels`, `--env` |
+| etcd | `--etcd-endpoints`, `--etcd-prefix`, `--etcd-username`, `--etcd-password` |
+| Paths | `--cert-path`, `--geoip-path`, `--log-path` |
+| Log Level | `--log-level` |
+| Secrets | `--cc-challenge-secret` (required in production), `--admin-token` |
 
 ### Tier 2: Cluster-Shared (etcd Global Config)
 
@@ -144,7 +141,7 @@ etcdctl put /nozdormu/global/redis '{
 }'
 ```
 
-If no global keys exist in etcd, the system falls back to env vars and defaults (fully backward compatible).
+If no global keys exist in etcd, the system falls back to defaults (fully backward compatible).
 
 ### Tier 3: Site Configuration (etcd Per-Site)
 

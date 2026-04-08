@@ -20,13 +20,14 @@ services:
     environment:
       - RUST_LOG=info
       - CARGO_HOME=/usr/local/cargo
-      - CDN_NODE_ID=dev-node-01
-      - CDN_NODE_LABELS=region:local,tier:dev
-      - CDN_ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
-      - CDN_ETCD_PREFIX=/nozdormu
-      - CDN_REDIS_MODE=sentinel
-      - CDN_REDIS_SENTINEL_MASTER=mymaster
-      - CDN_REDIS_SENTINELS=sentinel1:26379,sentinel2:26379,sentinel3:26379
+    command: >
+      cargo watch -x "run -p cdn-proxy --
+        --node-id dev-node-01
+        --node-labels region:local,dc:local,tier:dev
+        --env development
+        --etcd-endpoints http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+        --etcd-prefix /nozdormu
+        -c /app/config/default.yaml"
     depends_on:
       etcd1:
         condition: service_healthy
@@ -49,10 +50,16 @@ services:
       - ../config:/app/config:ro
       - certs-data:/etc/nozdormu/certs
       - geoip-data:/etc/nozdormu/geoip
-    env_file:
-      - ../.env
+    command: >
+      /app/cdn-proxy
+        -c /app/config/default.yaml
+        --node-id ${CDN_NODE_ID:-node-01}
+        --env ${CDN_ENV:-production}
+        --etcd-endpoints ${CDN_ETCD_ENDPOINTS:-http://etcd1:2379,http://etcd2:2379,http://etcd3:2379}
+        --etcd-prefix ${CDN_ETCD_PREFIX:-/nozdormu}
+        --log-level ${CDN_LOG_LEVEL:-info}
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${CDN_LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6188/health"]
       interval: 10s

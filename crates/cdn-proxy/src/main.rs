@@ -14,17 +14,105 @@ use cdn_proxy::logging::queue::init_log_queue;
 use cdn_proxy::proxy::CdnProxy;
 use cdn_proxy::ssl::challenge::ChallengeStore;
 use cdn_proxy::utils::redis_pool::RedisPool;
+use clap::Parser;
 use pingora::prelude::*;
 use pingora::services::listening::Service as ListeningService;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Parser, Debug)]
+#[command(name = "cdn-proxy", about = "Nozdormu CDN reverse proxy")]
+struct CdnOpt {
+    #[command(flatten)]
+    pingora: Opt,
+
+    /// Node identifier
+    #[arg(long, default_value = "dev-node-01")]
+    node_id: String,
+
+    /// Comma-separated node labels (e.g. region:asia,dc:tokyo)
+    #[arg(long, default_value = "")]
+    node_labels: String,
+
+    /// Environment name (development, staging, production)
+    #[arg(long = "env", default_value = "development")]
+    cdn_env: String,
+
+    /// Comma-separated etcd endpoints
+    #[arg(long, default_value = "http://127.0.0.1:2379")]
+    etcd_endpoints: String,
+
+    /// etcd key prefix
+    #[arg(long, default_value = "/nozdormu")]
+    etcd_prefix: String,
+
+    /// etcd authentication username
+    #[arg(long)]
+    etcd_username: Option<String>,
+
+    /// etcd authentication password
+    #[arg(long)]
+    etcd_password: Option<String>,
+
+    /// etcd connection timeout in milliseconds
+    #[arg(long, default_value = "5000")]
+    etcd_connect_timeout: u64,
+
+    /// Path to TLS certificate directory
+    #[arg(long, default_value = "/etc/nozdormu/certs")]
+    cert_path: String,
+
+    /// Path to GeoIP database directory
+    #[arg(long, default_value = "/etc/nozdormu/geoip")]
+    geoip_path: String,
+
+    /// Path to log directory
+    #[arg(long, default_value = "/var/log/nozdormu")]
+    log_path: String,
+
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, default_value = "info")]
+    log_level: String,
+
+    /// HMAC secret for CC challenge tokens
+    #[arg(long, default_value = "cdn_default_cc_secret_change_me")]
+    cc_challenge_secret: String,
+
+    /// Bearer token for admin API authentication
+    #[arg(long)]
+    admin_token: Option<String>,
+}
+
 fn main() {
+    // ── 0. Parse CLI arguments ──
+    let cdn_opt = CdnOpt::parse();
+
+    // Initialize logger (RUST_LOG env var still controls env_logger)
+    std::env::set_var("RUST_LOG", &cdn_opt.log_level);
     env_logger::init();
 
-    // ── 1. Bootstrap: read env-only config (node identity + etcd address + paths) ──
-    let bootstrap = BootstrapConfig::from_env();
+    // ── 1. Bootstrap: build config from CLI args ──
+    let bootstrap = BootstrapConfig::from_cli(
+        cdn_config::node_config::NodeInfo::from_cli(
+            cdn_opt.node_id.clone(),
+            cdn_opt.node_labels.clone(),
+            cdn_opt.cdn_env.clone(),
+        ),
+        cdn_config::node_config::EtcdConfig::from_cli(
+            cdn_opt.etcd_endpoints.clone(),
+            cdn_opt.etcd_prefix.clone(),
+            cdn_opt.etcd_username.clone(),
+            cdn_opt.etcd_password.clone(),
+            cdn_opt.etcd_connect_timeout,
+        ),
+        cdn_config::node_config::PathsConfig::from_cli(
+            cdn_opt.cert_path.clone(),
+            cdn_opt.geoip_path.clone(),
+            cdn_opt.log_path.clone(),
+        ),
+        cdn_opt.log_level.clone(),
+    );
     log::info!(
         "[Bootstrap] Node ID: {}, Labels: {:?}, Env: {}",
         bootstrap.node.id,
@@ -40,7 +128,11 @@ fn main() {
 
     let global_config = rt.block_on(cdn_config::load_global_config(&bootstrap.etcd));
 
-    let node_config = NodeConfig::from_etcd_and_env(&global_config);
+    let node_config = NodeConfig::from_etcd_and_cli(
+        &global_config,
+        &bootstrap,
+        cdn_opt.cc_challenge_secret.clone(),
+    );
     if let Err(errors) = node_config.validate() {
         for e in &errors {
             log::error!("[Config] {}", e);
@@ -50,15 +142,15 @@ fn main() {
     node_config.print_summary();
 
     // ── 3. Pingora server bootstrap ──
-    let opt = Opt::parse_args();
-    let config_path = opt
+    let config_path = cdn_opt
+        .pingora
         .conf
         .clone()
         .unwrap_or_else(|| "config/default.yaml".to_string());
     let cdn_config =
         load_cdn_config(Path::new(&config_path)).expect("failed to load CDN config");
 
-    let mut server = Server::new(Some(opt)).expect("failed to create server");
+    let mut server = Server::new(Some(cdn_opt.pingora)).expect("failed to create server");
     server.bootstrap();
 
     // ── 4. Async initialization (Redis + etcd sites) ──
@@ -142,14 +234,13 @@ fn main() {
     let challenge_store = Arc::new(ChallengeStore::new());
 
     // ── Admin API state ──
-    let admin_token = std::env::var("CDN_ADMIN_TOKEN").ok().filter(|t| !t.is_empty());
     let admin_state = Arc::new(AdminState {
         live_config: Arc::clone(&live_config),
         balancer: Arc::clone(&dynamic_balancer),
         cc_engine: Arc::clone(&cc_engine),
         challenge_store: Arc::clone(&challenge_store),
         etcd_manager: Arc::clone(&etcd_manager),
-        admin_token,
+        admin_token: cdn_opt.admin_token,
     });
 
     let cdn_proxy = CdnProxy {

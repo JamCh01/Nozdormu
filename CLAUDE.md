@@ -51,7 +51,7 @@ Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-middleware
 ## Architecture Essentials
 
 - **Config hot-reload**: `ArcSwap<LiveConfig>` swapped atomically from etcd watch events. WAF IP sets are compiled per-config and cached thread-locally.
-- **Hybrid config loading**: Cluster-shared config (Redis, security, balancer, timeouts, cache, SSL, logging) loaded from etcd `{prefix}/global/*` at startup, with env vars as override. Priority: **env > etcd > default**. Bootstrap-only vars (node identity, etcd address, paths, log level) are always env-only.
+- **Hybrid config loading**: Cluster-shared config (Redis, security, balancer, timeouts, cache, SSL, logging) loaded from etcd `{prefix}/global/*` at startup, with env vars as override. Priority: **env > etcd > default**. Bootstrap params (node identity, etcd address, paths, log level, secrets) are CLI-only.
 - **Per-request context**: `ProxyCtx` carries all state through Pingora's `request_filter` → `upstream_peer` → `response_filter` → `logging` callbacks.
 - **Hybrid CC counting**: Local moka cache (zero-latency) + async Redis sync every 10 increments. Redis counters use Lua INCRBY+EXPIRE for atomic TTL.
 - **Passive health checks**: Tracked in `logging()` callback via DashMap. No separate probe goroutines yet.
@@ -72,7 +72,8 @@ Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-middleware
 docker compose --profile infra up -d
 
 # Run the proxy
-RUST_LOG=info CDN_ENV=development cargo run -p cdn-proxy -- -c config/default.yaml
+cargo run -p cdn-proxy -- -c config/default.yaml \
+  --env development --log-level info
 
 # Or with Docker (dev mode with hot-reload)
 docker compose --profile dev up
@@ -85,18 +86,18 @@ Admin API runs on `127.0.0.1:8080` (localhost only).
 
 Configuration uses a three-tier system:
 
-1. **Bootstrap env vars** (always from env): `CDN_NODE_ID`, `CDN_ETCD_ENDPOINTS`, `CDN_CERT_PATH`, etc.
+1. **Bootstrap CLI args** (always from CLI): `--node-id`, `--etcd-endpoints`, `--cert-path`, `--cc-challenge-secret`, etc.
 2. **Cluster-shared config** (from etcd `{prefix}/global/*`): Redis, security, balancer, timeouts, cache/OSS, SSL/ACME, logging
 3. **Site config** (from etcd `{prefix}/sites/{site_id}`): per-site WAF, CC, cache, origins, domains, redirects
 
-Startup flow: `BootstrapConfig::from_env()` → `load_global_config(etcd)` → `NodeConfig::from_etcd_and_env()`.
+Startup flow: `CdnOpt::parse()` → `BootstrapConfig::from_cli()` → `load_global_config(etcd)` → `NodeConfig::from_etcd_and_cli()`.
 
-Env vars always override etcd values (for emergency single-node overrides). If no etcd global keys exist, behavior is identical to env-only mode.
+Env vars override etcd values for cluster-shared configs (for emergency single-node overrides). If no etcd global keys exist, defaults are used.
 
 Critical production requirements:
-- `CDN_CC_CHALLENGE_SECRET` **must** be set (startup fails with default in non-development)
-- `CDN_ETCD_ENDPOINTS` is required
-- `CDN_NODE_ID` is required
+- `--cc-challenge-secret` **must** be set (startup fails with default in non-development)
+- `--etcd-endpoints` is required
+- `--node-id` is required
 
 ## Code Style
 
