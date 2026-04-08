@@ -74,14 +74,6 @@ struct CdnOpt {
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     log_level: String,
-
-    /// HMAC secret for CC challenge tokens
-    #[arg(long, default_value = "cdn_default_cc_secret_change_me")]
-    cc_challenge_secret: String,
-
-    /// Bearer token for admin API authentication
-    #[arg(long)]
-    admin_token: Option<String>,
 }
 
 fn main() {
@@ -131,7 +123,6 @@ fn main() {
     let node_config = NodeConfig::from_etcd_and_cli(
         &global_config,
         &bootstrap,
-        cdn_opt.cc_challenge_secret.clone(),
     );
     if let Err(errors) = node_config.validate() {
         for e in &errors {
@@ -240,7 +231,7 @@ fn main() {
         cc_engine: Arc::clone(&cc_engine),
         challenge_store: Arc::clone(&challenge_store),
         etcd_manager: Arc::clone(&etcd_manager),
-        admin_token: cdn_opt.admin_token,
+        admin_token: node_config.security.admin_token.clone(),
     });
 
     let cdn_proxy = CdnProxy {

@@ -134,7 +134,6 @@ export RUST_LOG=info
     --geoip-path /opt/geo \
     --cert-path /tmp/nozdormu-certs \
     --log-path /tmp/nozdormu-logs \
-    --cc-challenge-secret test_e2e_secret_key_12345 \
     --log-level info &
 PROXY_PID=$!
 echo "$PROXY_PID" >> "$PIDS_FILE"

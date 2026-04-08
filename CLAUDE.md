@@ -86,8 +86,8 @@ Admin API runs on `127.0.0.1:8080` (localhost only).
 
 Configuration uses a three-tier system:
 
-1. **Bootstrap CLI args** (always from CLI): `--node-id`, `--etcd-endpoints`, `--cert-path`, `--cc-challenge-secret`, etc.
-2. **Cluster-shared config** (from etcd `{prefix}/global/*`): Redis, security, balancer, timeouts, cache/OSS, SSL/ACME, logging
+1. **Bootstrap CLI args** (always from CLI): `--node-id`, `--etcd-endpoints`, `--cert-path`, `--log-level`, etc.
+2. **Cluster-shared config** (from etcd `{prefix}/global/*`): Redis, security (CC secret, admin token, trusted proxies), balancer, timeouts, cache/OSS, SSL/ACME, logging
 3. **Site config** (from etcd `{prefix}/sites/{site_id}`): per-site WAF, CC, cache, origins, domains, redirects
 
 Startup flow: `CdnOpt::parse()` → `BootstrapConfig::from_cli()` → `load_global_config(etcd)` → `NodeConfig::from_etcd_and_cli()`.
@@ -95,7 +95,7 @@ Startup flow: `CdnOpt::parse()` → `BootstrapConfig::from_cli()` → `load_glob
 Env vars override etcd values for cluster-shared configs (for emergency single-node overrides). If no etcd global keys exist, defaults are used.
 
 Critical production requirements:
-- `--cc-challenge-secret` **must** be set (startup fails with default in non-development)
+- `cc_challenge_secret` **must** be set in etcd `{prefix}/global/security` (startup warns with default in non-development)
 - `--etcd-endpoints` is required
 - `--node-id` is required
 

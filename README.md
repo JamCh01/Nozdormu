@@ -109,7 +109,6 @@ These are required before etcd is available and are passed via command-line flag
 | etcd | `--etcd-endpoints`, `--etcd-prefix`, `--etcd-username`, `--etcd-password` |
 | Paths | `--cert-path`, `--geoip-path`, `--log-path` |
 | Log Level | `--log-level` |
-| Secrets | `--cc-challenge-secret` (required in production), `--admin-token` |
 
 ### Tier 2: Cluster-Shared (etcd Global Config)
 
@@ -118,7 +117,7 @@ Loaded from etcd at startup under `{prefix}/global/*`. Shared across all nodes. 
 | etcd Key | Contents |
 |----------|----------|
 | `{prefix}/global/redis` | Redis mode, sentinels, host, port, timeouts, pool size |
-| `{prefix}/global/security` | WAF mode, CC defaults, trusted proxies |
+| `{prefix}/global/security` | WAF mode, CC defaults, trusted proxies, CC challenge secret, admin token |
 | `{prefix}/global/balancer` | LB algorithm, retries, DNS, health check thresholds |
 | `{prefix}/global/proxy` | Connect/send/read/WebSocket/SSE/gRPC timeouts |
 | `{prefix}/global/cache` | OSS endpoint, bucket, region, SSL, TTL, max size |

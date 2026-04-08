@@ -109,23 +109,20 @@ impl NodeConfig {
     /// Build NodeConfig from CLI bootstrap values + etcd global config.
     ///
     /// Bootstrap configs (node, etcd, paths) come from CLI args.
-    /// Cluster-shared configs use etcd as base with env override.
-    /// `cc_challenge_secret` overrides the security config value from CLI.
+    /// Cluster-shared configs (including security secrets) use etcd as base
+    /// with env override.
     pub fn from_etcd_and_cli(
         global: &crate::global_config::GlobalConfig,
         bootstrap: &BootstrapConfig,
-        cc_challenge_secret: String,
     ) -> Self {
-        let mut security =
-            SecurityConfig::from_etcd_with_env_override(global.security.as_ref());
-        security.cc_challenge_secret = cc_challenge_secret;
-
         Self {
             node: bootstrap.node.clone(),
             etcd: bootstrap.etcd.clone(),
             paths: bootstrap.paths.clone(),
             redis: RedisConfig::from_etcd_with_env_override(global.redis.as_ref()),
-            security,
+            security: SecurityConfig::from_etcd_with_env_override(
+                global.security.as_ref(),
+            ),
             balancer: BalancerConfig::from_etcd_with_env_override(global.balancer.as_ref()),
             proxy: ProxyTimeoutConfig::from_etcd_with_env_override(global.proxy.as_ref()),
             cache_oss: CacheOssConfig::from_etcd_with_env_override(global.cache.as_ref()),
@@ -150,7 +147,7 @@ impl NodeConfig {
             && self.security.cc_challenge_secret == "cdn_default_cc_secret_change_me"
         {
             errors.push(
-                "CDN_CC_CHALLENGE_SECRET must be set in non-development environments".to_string(),
+                "cc_challenge_secret must be set in non-development environments (via etcd global/security)".to_string(),
             );
         }
 
@@ -616,6 +613,9 @@ pub struct SecurityConfig {
     pub cc_challenge_secret: String,
     /// Extra trusted proxy CIDRs for X-Forwarded-For parsing.
     pub trusted_proxies: Vec<IpNet>,
+    /// Optional Bearer token for admin API authentication.
+    #[serde(default)]
+    pub admin_token: Option<String>,
 }
 
 impl std::fmt::Debug for SecurityConfig {
@@ -627,6 +627,7 @@ impl std::fmt::Debug for SecurityConfig {
             .field("cc_default_block_duration", &self.cc_default_block_duration)
             .field("cc_challenge_secret", &"[REDACTED]")
             .field("trusted_proxies", &self.trusted_proxies)
+            .field("admin_token", &self.admin_token.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -640,6 +641,7 @@ impl Default for SecurityConfig {
             cc_default_block_duration: 600,
             cc_challenge_secret: "cdn_default_cc_secret_change_me".to_string(),
             trusted_proxies: Vec::new(),
+            admin_token: None,
         }
     }
 }
@@ -670,6 +672,7 @@ impl SecurityConfig {
                 "cdn_default_cc_secret_change_me",
             ),
             trusted_proxies,
+            admin_token: env_or_none("CDN_ADMIN_TOKEN"),
         }
     }
 
@@ -710,7 +713,6 @@ impl SecurityConfig {
             } else {
                 d.cc_default_block_duration
             },
-            // Secret always prefers env — should not be stored in etcd plaintext
             cc_challenge_secret: if env_is_set("CDN_CC_CHALLENGE_SECRET") {
                 env_or("CDN_CC_CHALLENGE_SECRET", "cdn_default_cc_secret_change_me")
             } else {
@@ -720,6 +722,11 @@ impl SecurityConfig {
                 Self::parse_trusted_proxies(&env_or("CDN_TRUSTED_PROXIES", ""))
             } else {
                 d.trusted_proxies
+            },
+            admin_token: if env_is_set("CDN_ADMIN_TOKEN") {
+                env_or_none("CDN_ADMIN_TOKEN")
+            } else {
+                d.admin_token
             },
         }
     }

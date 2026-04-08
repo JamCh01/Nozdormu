@@ -28,10 +28,11 @@ etcdctl put "${PREFIX}/global/redis" '{
 }'
 
 etcdctl put "${PREFIX}/global/security" '{
-  "waf_mode": "block",
+  "waf_default_mode": "block",
   "cc_default_rate": 100,
   "cc_default_window": 60,
-  "cc_block_duration": 600,
+  "cc_default_block_duration": 600,
+  "cc_challenge_secret": "test_e2e_secret_key_12345",
   "trusted_proxies": ["127.0.0.0/8"]
 }'
 
