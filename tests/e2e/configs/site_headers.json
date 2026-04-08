@@ -1,0 +1,68 @@
+{
+  "site_id": "headers",
+  "enabled": true,
+  "domains": ["headers.cdn.jam114514.me"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+  "headers": {
+    "request": [
+      {
+        "action": "set",
+        "name": "X-Custom-Request",
+        "value": "nozdormu-cdn"
+      },
+      {
+        "action": "set",
+        "name": "X-Real-IP",
+        "value": "${client_ip}"
+      },
+      {
+        "action": "set",
+        "name": "X-Site-ID",
+        "value": "${site_id}"
+      }
+    ],
+    "response": [
+      {
+        "action": "set",
+        "name": "X-CDN-Node",
+        "value": "nozdormu-test"
+      },
+      {
+        "action": "set",
+        "name": "X-Client-IP",
+        "value": "${client_ip}"
+      },
+      {
+        "action": "set",
+        "name": "X-Req-Host",
+        "value": "${host}"
+      },
+      {
+        "action": "set",
+        "name": "X-Cache-Result",
+        "value": "${cache_status}"
+      },
+      {
+        "action": "remove",
+        "name": "X-Backend-Id"
+      },
+      {
+        "action": "add",
+        "name": "X-Frame-Options",
+        "value": "DENY"
+      }
+    ]
+  },
+  "waf": { "enabled": false },
+  "cc": { "enabled": false },
+  "cache": { "enabled": false },
+  "compression": { "enabled": false }
+}

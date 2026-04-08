@@ -14,3 +14,4 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 etcd-client = { workspace = true }
 tokio = { workspace = true }
+ipnet = { workspace = true }

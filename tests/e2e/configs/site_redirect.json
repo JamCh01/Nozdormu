@@ -1,0 +1,53 @@
+{
+  "site_id": "redirect",
+  "enabled": true,
+  "domains": ["redirect.cdn.jam114514.me", "cdn-old.jam114514.me"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+  "domain_redirect": {
+    "enabled": true,
+    "target_domain": "redirect.cdn.jam114514.me",
+    "source_domains": ["cdn-old.jam114514.me"],
+    "status_code": 301
+  },
+  "protocol": {
+    "force_https": false
+  },
+  "url_redirect_rules": [
+    {
+      "type": "exact",
+      "source": "/old-page",
+      "target": "/new-page",
+      "status_code": 302,
+      "enabled": true,
+      "preserve_query_string": true
+    },
+    {
+      "type": "prefix",
+      "source": "/old/",
+      "target": "/new/$1",
+      "status_code": 301,
+      "enabled": true,
+      "preserve_query_string": true
+    },
+    {
+      "type": "regex",
+      "source": "^/post/(\\d+)$",
+      "target": "/article/$1",
+      "status_code": 301,
+      "enabled": true,
+      "preserve_query_string": false
+    }
+  ],
+  "waf": { "enabled": false },
+  "cc": { "enabled": false },
+  "cache": { "enabled": false },
+  "compression": { "enabled": false }
+}

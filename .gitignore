@@ -24,3 +24,9 @@ Thumbs.db
 
 # Docker
 docker/data/
+
+# Claude Code
+.claude/
+
+# E2E test runtime
+tests/e2e/.pids

@@ -114,6 +114,17 @@ pub fn validate_domain(domain: &str) -> Result<(), String> {
         return Err("wildcard must be at the start: *.domain".to_string());
     }
 
+    // No multiple wildcards (e.g., *.*.example.com)
+    if domain.starts_with("*.") {
+        let remainder = &domain[2..];
+        if remainder.is_empty() {
+            return Err("wildcard domain must have a suffix after *.".to_string());
+        }
+        if remainder.contains('*') {
+            return Err("multiple wildcards are not allowed".to_string());
+        }
+    }
+
     // No consecutive dots
     if domain.contains("..") {
         return Err("domain must not contain consecutive dots".to_string());
@@ -142,5 +153,9 @@ mod tests {
         assert!(validate_domain("example..com").is_err());
         assert!(validate_domain("foo.*.com").is_err());
         assert!(validate_domain(&"a".repeat(254)).is_err());
+        // Multiple wildcards
+        assert!(validate_domain("*.*.example.com").is_err());
+        // Bare wildcard with no suffix
+        assert!(validate_domain("*.").is_err());
     }
 }

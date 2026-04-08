@@ -31,7 +31,29 @@ pub struct SiteConfig {
     #[serde(default)]
     pub domain_redirect: Option<DomainRedirectConfig>,
     #[serde(default)]
+    pub url_redirect_rules: Vec<UrlRedirectRule>,
+    #[serde(default)]
     pub timeouts: TimeoutsConfig,
+    #[serde(default)]
+    pub compression: CompressionConfig,
+}
+
+impl SiteConfig {
+    /// Log warnings for contradictory or suspicious configuration.
+    pub fn warn_invalid(&self) {
+        if self.protocol.force_https && self.protocol.force_http {
+            log::warn!(
+                "[Config] site '{}': force_https and force_http both true, force_https takes precedence",
+                self.site_id
+            );
+        }
+        if self.domains.is_empty() && self.enabled {
+            log::warn!("[Config] site '{}': enabled but has no domains", self.site_id);
+        }
+        if self.origins.is_empty() && self.enabled {
+            log::warn!("[Config] site '{}': enabled but has no origins", self.site_id);
+        }
+    }
 }
 
 // ============================================================
@@ -284,7 +306,7 @@ pub struct CacheRule {
     pub regex_options: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheRuleType {
     Path,
@@ -337,7 +359,7 @@ pub struct WafRules {
 // CC
 // ============================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CcConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -351,6 +373,19 @@ pub struct CcConfig {
     pub default_action: CcAction,
     #[serde(default)]
     pub rules: Vec<CcRule>,
+}
+
+impl Default for CcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_rate: default_cc_rate(),
+            default_window: default_cc_window(),
+            default_block_duration: default_cc_block_duration(),
+            default_action: CcAction::default(),
+            rules: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,3 +553,87 @@ fn default_cc_path() -> String { "/".to_string() }
 fn default_connect_timeout() -> u64 { 10 }
 fn default_send_timeout() -> u64 { 60 }
 fn default_read_timeout() -> u64 { 60 }
+
+// ============================================================
+// Compression
+// ============================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompressionAlgorithm {
+    Gzip,
+    Brotli,
+    Zstd,
+}
+
+impl CompressionAlgorithm {
+    /// HTTP `Content-Encoding` token for this algorithm.
+    pub fn encoding_token(&self) -> &'static str {
+        match self {
+            CompressionAlgorithm::Gzip => "gzip",
+            CompressionAlgorithm::Brotli => "br",
+            CompressionAlgorithm::Zstd => "zstd",
+        }
+    }
+
+    /// Parse from `Accept-Encoding` token.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token.trim().to_lowercase().as_str() {
+            "gzip" => Some(CompressionAlgorithm::Gzip),
+            "br" => Some(CompressionAlgorithm::Brotli),
+            "zstd" => Some(CompressionAlgorithm::Zstd),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_compression_algorithms")]
+    pub algorithms: Vec<CompressionAlgorithm>,
+    #[serde(default = "default_compression_level")]
+    pub level: u32,
+    #[serde(default = "default_compression_min_size")]
+    pub min_size: u64,
+    #[serde(default = "default_compressible_types")]
+    pub compressible_types: Vec<String>,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            algorithms: default_compression_algorithms(),
+            level: default_compression_level(),
+            min_size: default_compression_min_size(),
+            compressible_types: default_compressible_types(),
+        }
+    }
+}
+
+fn default_compression_algorithms() -> Vec<CompressionAlgorithm> {
+    vec![
+        CompressionAlgorithm::Zstd,
+        CompressionAlgorithm::Brotli,
+        CompressionAlgorithm::Gzip,
+    ]
+}
+
+fn default_compression_level() -> u32 { 6 }
+fn default_compression_min_size() -> u64 { 256 }
+
+fn default_compressible_types() -> Vec<String> {
+    vec![
+        "text/*".to_string(),
+        "application/json".to_string(),
+        "application/javascript".to_string(),
+        "application/xml".to_string(),
+        "application/xhtml+xml".to_string(),
+        "application/rss+xml".to_string(),
+        "application/atom+xml".to_string(),
+        "application/wasm".to_string(),
+        "image/svg+xml".to_string(),
+    ]
+}

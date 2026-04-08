@@ -1,0 +1,31 @@
+{
+  "site_id": "lb-backup",
+  "enabled": true,
+  "domains": ["lb-backup.cdn.jam114514.me"],
+  "origins": [
+    {
+      "id": "primary-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http",
+      "backup": false
+    },
+    {
+      "id": "backup-1",
+      "host": "127.0.0.1",
+      "port": 8083,
+      "weight": 10,
+      "protocol": "http",
+      "backup": true
+    }
+  ],
+  "load_balancer": {
+    "algorithm": "round_robin",
+    "retries": 1
+  },
+  "waf": { "enabled": false },
+  "cc": { "enabled": false },
+  "cache": { "enabled": false },
+  "compression": { "enabled": false }
+}

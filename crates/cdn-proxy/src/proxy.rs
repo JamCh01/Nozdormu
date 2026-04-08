@@ -1,16 +1,63 @@
+use crate::balancer::DynamicBalancer;
 use crate::context::{CacheStatus, ProxyCtx, ProtocolType};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use bytes::Bytes;
 use cdn_config::LiveConfig;
+use cdn_middleware::cc::{action::CcActionResult, CcEngine};
+use cdn_middleware::redirect;
+use cdn_middleware::waf::{CompiledWafSets, WafEngine, WafResult};
 use pingora::http::ResponseHeader;
 use pingora::prelude::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+/// Global monotonic counter for WAF sets cache versioning.
+/// Incremented each time a new SiteConfig Arc is seen, preventing ABA reuse.
+static WAF_CACHE_VERSION: AtomicU64 = AtomicU64::new(0);
+
+// Thread-local cache for compiled WAF IP sets, keyed by (site_id, version).
+// The version is assigned per unique Arc<SiteConfig> pointer, so config reloads
+// always get a fresh entry even if the allocator reuses the same address.
+thread_local! {
+    static WAF_SETS_CACHE: RefCell<HashMap<(usize, u64), Arc<CompiledWafSets>>> = RefCell::new(HashMap::new());
+}
+
+fn get_compiled_waf_sets(site: &Arc<cdn_common::SiteConfig>) -> Arc<CompiledWafSets> {
+    let ptr = Arc::as_ptr(site) as usize;
+    WAF_SETS_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        // Check if any entry with this pointer exists
+        if let Some((&key, sets)) = cache.iter().find(|((p, _), _)| *p == ptr) {
+            let _ = key;
+            return Arc::clone(sets);
+        }
+        let version = WAF_CACHE_VERSION.fetch_add(1, AtomicOrdering::Relaxed);
+        let sets = Arc::new(CompiledWafSets::build(&site.waf));
+        // Evict stale entries (keep max 64 per thread)
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert((ptr, version), Arc::clone(&sets));
+        sets
+    })
+}
 
 pub struct CdnProxy {
+    /// Static LB (temporary fallback, used when no site config is available)
     pub lb: Arc<LoadBalancer<RoundRobin>>,
     pub sni: String,
     pub tls: bool,
     pub live_config: Arc<ArcSwap<LiveConfig>>,
+    pub waf_engine: Arc<WafEngine>,
+    pub cc_engine: Arc<CcEngine>,
+    pub balancer: Arc<DynamicBalancer>,
+    pub challenge_store: Arc<crate::ssl::challenge::ChallengeStore>,
+    pub redis_pool: Arc<crate::utils::redis_pool::RedisPool>,
+    pub trusted_proxies: Vec<ipnet::IpNet>,
+    pub default_compression: cdn_common::CompressionConfig,
 }
 
 #[async_trait]
@@ -35,7 +82,15 @@ impl ProxyHttp for CdnProxy {
 
         // ── 2. ACME challenge (before routing) ──
         if path.starts_with("/.well-known/acme-challenge/") {
-            // TODO: Phase 9 — serve ACME challenge from etcd
+            let host_header = session
+                .req_header()
+                .headers
+                .get("host")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if let Some(key_auth) = self.challenge_store.get_by_path(host_header, path) {
+                return self.serve_acme_challenge(session, &key_auth).await;
+            }
             return self.serve_not_found(session).await;
         }
 
@@ -45,11 +100,14 @@ impl ProxyHttp for CdnProxy {
                 .client_addr()
                 .and_then(|a| a.as_inet())
                 .map(|a| a.ip());
-            if !remote.map(|ip| is_private_ip(ip)).unwrap_or(false) {
+            if !remote.map(|ip| crate::utils::ip::is_private_ip(ip)).unwrap_or(false) {
                 return self.serve_forbidden(session).await;
             }
-            // TODO: Phase 12 — serve /health/detail and /status
-            return self.serve_not_found(session).await;
+            if path == "/health/detail" {
+                return self.serve_health_detail(session).await;
+            } else {
+                return self.serve_status(session).await;
+            }
         }
 
         // ── 4. Client IP extraction ──
@@ -57,7 +115,14 @@ impl ProxyHttp for CdnProxy {
             .client_addr()
             .and_then(|a| a.as_inet())
             .map(|a| a.ip());
-        // TODO: Phase 12 — XFF anti-spoofing (utils/ip.rs)
+
+        // XFF anti-spoofing
+        if let (Some(remote_ip), Some(xff)) = (
+            ctx.client_ip,
+            session.req_header().headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+        ) {
+            ctx.client_ip = Some(crate::utils::ip::real_ip_from_xff(xff, remote_ip, &self.trusted_proxies));
+        }
 
         // ── 5. Route matching ──
         let host = session
@@ -72,34 +137,236 @@ impl ProxyHttp for CdnProxy {
                     .get("host")
                     .and_then(|v| v.to_str().ok())
             })
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
         let config = self.live_config.load();
-        match config.match_site(host) {
+        match config.match_site(&host) {
             Some(site) => {
                 ctx.site_id = site.site_id.clone();
                 ctx.site_config = Some(site);
             }
             None => {
-                log::warn!("[Access] site not found: {}", host);
+                log::warn!("[Access] site not found: {}", &host);
                 return self.serve_not_found(session).await;
             }
         }
 
+        // Cache request info for response_filter and logging (avoids re-extraction)
+        ctx.host = host.clone();
+        ctx.uri = session.req_header().uri.to_string();
+        // Detect scheme from: 1) URI scheme, 2) downstream TLS digest, 3) fallback "http"
+        ctx.scheme = session
+            .req_header()
+            .uri
+            .scheme_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                let is_client_tls = session
+                    .digest()
+                    .and_then(|d| d.ssl_digest.as_ref())
+                    .is_some();
+                if is_client_tls { "https" } else { "http" }.to_string()
+            });
+
         // ── 6. WAF check ──
-        // TODO: Phase 3
+        if let Some(ref site) = ctx.site_config {
+            if let Some(client_ip) = ctx.client_ip {
+                let waf_sets = get_compiled_waf_sets(site);
+                let (waf_result, geo_info) =
+                    self.waf_engine.check_with_sets(
+                        client_ip, &site.waf, &ctx.site_id,
+                        Some(&waf_sets.whitelist), Some(&waf_sets.blacklist),
+                    );
+
+                // Cache GeoIP info in context (queried once per request)
+                if let Some(geo) = geo_info {
+                    ctx.geo_info = Some(crate::context::GeoInfo {
+                        country_code: geo.country_code,
+                        country_name: geo.country_name,
+                        continent_code: geo.continent_code,
+                        subdivision_code: geo.subdivision_code,
+                        subdivision_name: geo.subdivision_name,
+                        city_name: geo.city_name,
+                        asn: geo.asn,
+                        asn_org: geo.asn_org,
+                        latitude: geo.latitude,
+                        longitude: geo.longitude,
+                    });
+                }
+
+                match waf_result {
+                    WafResult::Block { reason, .. } => {
+                        ctx.waf_blocked = true;
+                        ctx.waf_reason = Some(reason);
+                        return self.serve_forbidden(session).await;
+                    }
+                    WafResult::Log { reason, .. } => {
+                        ctx.waf_reason = Some(reason);
+                        // Continue processing — log-only mode
+                    }
+                    WafResult::Allow => {}
+                }
+            }
+        }
 
         // ── 7. CC check ──
-        // TODO: Phase 4
+        if let Some(ref site) = ctx.site_config {
+            if let Some(client_ip) = ctx.client_ip {
+                let uri = session.req_header().uri.to_string();
+                let path = session.req_header().uri.path().to_string();
+                let cookie_header = session
+                    .req_header()
+                    .headers
+                    .get("cookie")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let cc_result = self
+                    .cc_engine
+                    .check(
+                        client_ip,
+                        &uri,
+                        &path,
+                        cookie_header.as_deref(),
+                        &site.cc,
+                        &ctx.site_id,
+                    )
+                    .await;
+
+                match cc_result {
+                    CcActionResult::Block { retry_after, reason } => {
+                        ctx.cc_blocked = true;
+                        ctx.cc_reason = Some(reason);
+                        return self.serve_too_many_requests(session, retry_after).await;
+                    }
+                    CcActionResult::Challenge { cookie_value, reason } => {
+                        ctx.cc_reason = Some(reason);
+                        return self.serve_challenge(session, &cookie_value).await;
+                    }
+                    CcActionResult::Delay { delay_ms, reason } => {
+                        ctx.cc_reason = Some(reason);
+                        // Return 429 instead of sleeping to prevent task queue saturation under DDoS
+                        return self.serve_too_many_requests(session, (delay_ms / 1000).max(1)).await;
+                    }
+                    CcActionResult::Log { reason } => {
+                        ctx.cc_reason = Some(reason);
+                        // Continue processing — log-only mode
+                    }
+                    CcActionResult::Allow => {}
+                }
+            }
+        }
 
         // ── 8. Redirect check ──
-        // TODO: Phase 5
+        if let Some(ref site) = ctx.site_config {
+            let uri = session.req_header().uri.to_string();
+            let path = session.req_header().uri.path();
+            let query_string = session.req_header().uri.query();
+            let method = session.req_header().method.as_str();
+
+            if let Some(result) = redirect::check_redirect(
+                &ctx.scheme,
+                &host,
+                &uri,
+                path,
+                query_string,
+                method,
+                site.domain_redirect.as_ref(),
+                &site.protocol,
+                &site.url_redirect_rules,
+            ) {
+                return self
+                    .serve_redirect(session, &result.target_url, result.status_code, result.response_headers, result.cache_control.as_deref())
+                    .await;
+            }
+        }
 
         // ── 9. Protocol detection ──
-        // TODO: Phase 6
+        if let Some(ref site) = ctx.site_config {
+            ctx.protocol_type = crate::protocol::detect_protocol(session, &site.protocol);
+
+            match &ctx.protocol_type {
+                ProtocolType::WebSocket => {
+                    if let Err(reason) = crate::protocol::validate_websocket(session) {
+                        log::warn!("[Protocol] WebSocket validation failed: {}", reason);
+                        return self.serve_bad_request(session, reason).await;
+                    }
+                    ctx.cache_status = CacheStatus::Bypass;
+                }
+                ProtocolType::Sse => {
+                    ctx.cache_status = CacheStatus::Bypass;
+                }
+                ProtocolType::Grpc(_) => {
+                    // gRPC service whitelist check
+                    let path = session.req_header().uri.path();
+                    if !crate::protocol::check_grpc_service_whitelist(
+                        path,
+                        &site.protocol.grpc.services,
+                    ) {
+                        log::warn!("[Protocol] gRPC service not in whitelist: {}", path);
+                        return self.serve_forbidden(session).await;
+                    }
+                    ctx.cache_status = CacheStatus::Bypass;
+                }
+                ProtocolType::Http => {}
+            }
+        }
 
         // ── 10. Cache lookup ──
-        // TODO: Phase 8
+        if let Some(ref site) = ctx.site_config {
+            if let Some(client_ip) = ctx.client_ip {
+                let _ = client_ip; // used in future for vary
+            }
+            let path = session.req_header().uri.path();
+            let method = session.req_header().method.as_str();
+            let cache_control = session
+                .req_header()
+                .headers
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok());
+            let has_auth = session.req_header().headers.get("authorization").is_some();
+
+            let decision = cdn_cache::strategy::check_request_cacheability(
+                method,
+                path,
+                cache_control,
+                has_auth,
+                &site.cache,
+            );
+
+            if decision.cacheable {
+                let query_string = session.req_header().uri.query();
+                let vary_values: Vec<(String, String)> = site
+                    .cache
+                    .vary_headers
+                    .iter()
+                    .filter_map(|h| {
+                        session
+                            .req_header()
+                            .headers
+                            .get(h.as_str())
+                            .and_then(|v| v.to_str().ok())
+                            .map(|v| (h.clone(), v.to_string()))
+                    })
+                    .collect();
+
+                let cache_key = cdn_cache::key::generate_cache_key(
+                    &ctx.site_id,
+                    &host,
+                    path,
+                    query_string,
+                    site.cache.sort_query_string,
+                    &vary_values,
+                );
+
+                ctx.cache_key = Some(cache_key);
+                ctx.cache_ttl = Some(decision.ttl);
+                // Cache HIT lookup would go here when CacheStorage is wired in
+                // For now, all requests are MISS
+                ctx.cache_status = CacheStatus::Miss;
+            }
+        }
 
         Ok(false) // Continue to upstream_peer
     }
@@ -107,20 +374,41 @@ impl ProxyHttp for CdnProxy {
     async fn upstream_peer(
         &self,
         _session: &mut Session,
-        _ctx: &mut Self::CTX,
+        ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        // TODO: Phase 7 — full LB implementation
-        // Temporary: use static load balancer from config
+        // Dynamic balancer: health filter → backup fallback → LB algorithm → DNS → HttpPeer
+        if let Some(ref site) = ctx.site_config {
+            let (peer, origin) = self
+                .balancer
+                .select_peer(site, ctx.client_ip, &ctx.protocol_type)
+                .await?;
+            ctx.selected_origin = Some(origin);
+            return Ok(peer);
+        }
+
+        // Fallback: static load balancer (no site config available)
         let upstream = self
             .lb
             .select(b"", 256)
             .ok_or_else(|| pingora::Error::new(ErrorType::ConnectProxyFailure))?;
 
-        let peer = if self.tls {
+        let mut peer = if self.tls {
             HttpPeer::new(upstream, true, self.sni.clone())
         } else {
             HttpPeer::new(upstream, false, String::new())
         };
+
+        // Protocol-specific peer options (fallback path)
+        match &ctx.protocol_type {
+            ProtocolType::Grpc(_) => {
+                peer.options.set_http_version(2, 2);
+                peer.options.max_h2_streams = 10;
+            }
+            ProtocolType::WebSocket | ProtocolType::Sse => {
+                peer.options.read_timeout = None;
+            }
+            ProtocolType::Http => {}
+        }
 
         Ok(Box::new(peer))
     }
@@ -146,28 +434,75 @@ impl ProxyHttp for CdnProxy {
             upstream_request.insert_header("X-Forwarded-For", &xff).ok();
         }
 
-        let scheme = session
-            .req_header()
-            .uri
-            .scheme_str()
-            .unwrap_or("http");
         upstream_request
-            .insert_header("X-Forwarded-Proto", scheme)
+            .insert_header("X-Forwarded-Proto", &ctx.scheme)
             .ok();
 
-        // Host header
-        if !self.sni.is_empty() {
+        // Host header: use per-origin host for dynamic routing, static SNI for fallback
+        if let Some(ref origin) = ctx.selected_origin {
+            let host = origin.sni.as_deref().unwrap_or(&origin.host);
+            upstream_request.insert_header("Host", host).ok();
+        } else if !self.sni.is_empty() {
             upstream_request.insert_header("Host", &self.sni).ok();
         }
 
-        // TODO: Phase 10 — custom header rules + variable substitution
+        // Custom request header rules
+        if let Some(ref site) = ctx.site_config {
+            if !site.headers.request.is_empty() {
+                let ip_str = ctx.client_ip.map(|ip| ip.to_string());
+                let vars = cdn_middleware::headers::variables::build_request_variables(
+                    ip_str.as_deref(),
+                    &ctx.request_id,
+                    &ctx.host,
+                    &ctx.uri,
+                    &ctx.scheme,
+                    &ctx.site_id,
+                );
+                let ops = cdn_middleware::headers::request::apply_request_rules(
+                    &site.headers.request,
+                    &vars,
+                );
+                for op in &ops {
+                    apply_header_op(upstream_request, op);
+                }
+            }
+        }
+
+        // Protocol-specific upstream request headers
+        match &ctx.protocol_type {
+            ProtocolType::Sse => {
+                // Disable compression for SSE (must stream raw)
+                upstream_request
+                    .insert_header("Accept-Encoding", "identity")
+                    .ok();
+                upstream_request
+                    .insert_header("Cache-Control", "no-cache")
+                    .ok();
+                // Transparently forward Last-Event-ID
+                if let Some(last_id) = session
+                    .req_header()
+                    .headers
+                    .get("last-event-id")
+                    .and_then(|v| v.to_str().ok())
+                {
+                    upstream_request
+                        .insert_header("Last-Event-ID", last_id)
+                        .ok();
+                }
+            }
+            ProtocolType::Grpc(_) => {
+                // gRPC requires TE: trailers for trailer support
+                upstream_request.insert_header("TE", "trailers").ok();
+            }
+            _ => {}
+        }
 
         Ok(())
     }
 
     async fn response_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
@@ -185,9 +520,164 @@ impl ProxyHttp for CdnProxy {
             .insert_header("X-Request-ID", &ctx.request_id)
             .ok();
 
-        // TODO: Phase 10 — custom response header rules
+        // Custom response header rules
+        if let Some(ref site) = ctx.site_config {
+            if !site.headers.response.is_empty() {
+                let ip_str = ctx.client_ip.map(|ip| ip.to_string());
+                let vars = cdn_middleware::headers::variables::build_response_variables(
+                    ip_str.as_deref(),
+                    &ctx.request_id,
+                    &ctx.host,
+                    &ctx.uri,
+                    &ctx.scheme,
+                    &ctx.site_id,
+                    ctx.cache_status.as_str(),
+                );
+                let ops = cdn_middleware::headers::response::apply_response_rules(
+                    &site.headers.response,
+                    &vars,
+                );
+                for op in &ops {
+                    apply_header_op_response(upstream_response, op);
+                }
+            }
+        }
+
+        // Protocol-specific response headers
+        match &ctx.protocol_type {
+            ProtocolType::Sse => {
+                upstream_response
+                    .insert_header("X-Accel-Buffering", "no")
+                    .ok();
+                upstream_response
+                    .insert_header("Cache-Control", "no-cache")
+                    .ok();
+            }
+            _ => {}
+        }
+
+        // ── Response compression setup ──
+        // Skip for non-HTTP protocols (WebSocket/SSE/gRPC)
+        if matches!(
+            ctx.protocol_type,
+            ProtocolType::Http
+        ) {
+            // Skip if upstream already compressed
+            let already_encoded = upstream_response
+                .headers
+                .get("content-encoding")
+                .is_some();
+
+            if !already_encoded {
+                // Get effective compression config: site > global default
+                let comp_config = ctx
+                    .site_config
+                    .as_ref()
+                    .filter(|s| s.compression.enabled)
+                    .map(|s| &s.compression)
+                    .or_else(|| {
+                        if self.default_compression.enabled {
+                            Some(&self.default_compression)
+                        } else {
+                            None
+                        }
+                    });
+
+                if let Some(config) = comp_config {
+                    // Check response status (skip 204/304)
+                    let status = upstream_response.status.as_u16();
+                    let has_body = status != 204 && status != 304;
+
+                    // Check Content-Length against min_size
+                    let size_ok = upstream_response
+                        .headers
+                        .get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(|len| len >= config.min_size)
+                        .unwrap_or(true); // unknown size = try to compress
+
+                    // Check Content-Type
+                    let type_ok = upstream_response
+                        .headers
+                        .get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|ct| crate::compression::is_compressible(ct, config))
+                        .unwrap_or(false);
+
+                    if has_body && size_ok && type_ok {
+                        // Negotiate with client
+                        let accept = session
+                            .req_header()
+                            .headers
+                            .get("accept-encoding")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+
+                        if let Some(algo) =
+                            crate::compression::negotiate(accept, config)
+                        {
+                            upstream_response
+                                .insert_header("Content-Encoding", algo.encoding_token())
+                                .ok();
+                            upstream_response.remove_header("Content-Length");
+                            // Add Vary: Accept-Encoding
+                            if upstream_response.headers.get("vary").is_none() {
+                                upstream_response
+                                    .insert_header("Vary", "Accept-Encoding")
+                                    .ok();
+                            }
+                            ctx.compression_algorithm = Some(algo.clone());
+                            ctx.compressor = Some(crate::compression::Encoder::new(
+                                &algo,
+                                config.level,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
+    }
+
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        if let Some(ref mut encoder) = ctx.compressor {
+            if let Some(data) = body.take() {
+                let compressed = encoder.write_chunk(&data);
+                if !compressed.is_empty() {
+                    *body = Some(Bytes::from(compressed));
+                } else {
+                    *body = Some(Bytes::new());
+                }
+            }
+            if end_of_stream {
+                let encoder = ctx.compressor.take().unwrap();
+                let final_bytes = encoder.finish();
+                if !final_bytes.is_empty() {
+                    match body {
+                        Some(existing) if !existing.is_empty() => {
+                            let mut combined = existing.to_vec();
+                            combined.extend_from_slice(&final_bytes);
+                            *body = Some(Bytes::from(combined));
+                        }
+                        _ => {
+                            *body = Some(Bytes::from(final_bytes));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     async fn logging(
@@ -213,8 +703,100 @@ impl ProxyHttp for CdnProxy {
             ctx.protocol_type,
         );
 
-        // TODO: Phase 7 — passive health check
-        // TODO: Phase 11 — Prometheus metrics + Redis Streams log
+        // Passive health check
+        if let Some(ref origin) = ctx.selected_origin {
+            if status >= 500 || status == 0 {
+                self.balancer.health.record_failure(&ctx.site_id, &origin.id);
+            } else {
+                self.balancer.health.record_success(&ctx.site_id, &origin.id);
+            }
+        }
+
+        // Prometheus metrics
+        let response_size = session
+            .response_written()
+            .and_then(|r| {
+                r.headers
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+            })
+            .unwrap_or(0);
+
+        crate::logging::metrics::record_request(
+            &ctx.site_id,
+            method,
+            status,
+            ctx.cache_status.as_str(),
+            response_size,
+            0.0, // TODO: track actual duration with Instant in ctx
+            ctx.selected_origin.as_ref().map(|o| o.id.as_str()),
+        );
+
+        // Async log push
+        crate::logging::queue::push_log_entry(crate::logging::queue::LogEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            request_id: ctx.request_id.clone(),
+            method: method.to_string(),
+            host: ctx.host.clone(),
+            path: path.to_string(),
+            query_string: session.req_header().uri.query().map(|s| s.to_string()),
+            scheme: ctx.scheme.clone(),
+            protocol: format!("{:?}", ctx.protocol_type),
+            client_ip: ctx.client_ip,
+            country_code: ctx.geo_info.as_ref().and_then(|g| g.country_code.clone()),
+            asn: ctx.geo_info.as_ref().and_then(|g| g.asn),
+            status,
+            response_size,
+            duration_ms: 0.0, // TODO: track actual duration
+            site_id: ctx.site_id.clone(),
+            cache_status: ctx.cache_status.as_str().to_string(),
+            cache_key: ctx.cache_key.clone(),
+            origin_id: ctx.selected_origin.as_ref().map(|o| o.id.clone()),
+            origin_host: ctx.selected_origin.as_ref().map(|o| o.host.clone()),
+            waf_blocked: ctx.waf_blocked,
+            waf_reason: ctx.waf_reason.clone(),
+            cc_blocked: ctx.cc_blocked,
+            cc_reason: ctx.cc_reason.clone(),
+            node_id: String::new(), // TODO: inject from NodeConfig
+        });
+    }
+
+    fn fail_to_connect(
+        &self,
+        _session: &mut Session,
+        _peer: &HttpPeer,
+        ctx: &mut Self::CTX,
+        e: Box<pingora::Error>,
+    ) -> Box<pingora::Error> {
+        let max_retries = ctx
+            .site_config
+            .as_ref()
+            .map(|s| s.load_balancer.retries)
+            .unwrap_or(2);
+
+        ctx.balancer_tried += 1;
+
+        // Record failure for passive health check
+        if let Some(ref origin) = ctx.selected_origin {
+            self.balancer.health.record_failure(&ctx.site_id, &origin.id);
+        }
+
+        if ctx.balancer_tried < max_retries {
+            log::warn!(
+                "[Balancer] connect failed, retrying ({}/{}): {}",
+                ctx.balancer_tried, max_retries, e
+            );
+            let mut e = e;
+            e.set_retry(true);
+            return e;
+        }
+
+        log::error!(
+            "[Balancer] connect failed, no more retries ({}/{}): {}",
+            ctx.balancer_tried, max_retries, e
+        );
+        e
     }
 }
 
@@ -226,6 +808,57 @@ impl CdnProxy {
         header.insert_header("Content-Type", "text/plain")?;
         session.write_response_header(Box::new(header), false).await?;
         session.write_response_body(Some("OK\n".into()), true).await?;
+        Ok(true)
+    }
+
+    async fn serve_bad_request(&self, session: &mut Session, reason: &str) -> Result<bool> {
+        let body = format!("Bad Request: {}\n", reason);
+        let mut header = ResponseHeader::build(400, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some(body.into()), true).await?;
+        Ok(true)
+    }
+
+    async fn serve_acme_challenge(&self, session: &mut Session, key_auth: &str) -> Result<bool> {
+        let mut header = ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        header.insert_header("Content-Length", &key_auth.len().to_string())?;
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some(key_auth.to_string().into()), true).await?;
+        Ok(true)
+    }
+
+    async fn serve_health_detail(&self, session: &mut Session) -> Result<bool> {
+        let redis_ok = self.redis_pool.ping().await;
+        let detail = serde_json::json!({
+            "status": if redis_ok || !self.redis_pool.is_available() { "ok" } else { "degraded" },
+            "sites_loaded": self.live_config.load().sites.len(),
+            "redis": {
+                "available": self.redis_pool.is_available(),
+                "connected": redis_ok,
+                "description": self.redis_pool.describe(),
+            },
+        });
+        let body = serde_json::to_string_pretty(&detail).unwrap_or_default();
+        let mut header = ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "application/json")?;
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some(body.into()), true).await?;
+        Ok(true)
+    }
+
+    async fn serve_status(&self, session: &mut Session) -> Result<bool> {
+        let status = serde_json::json!({
+            "node": "nozdormu",
+            "version": env!("CARGO_PKG_VERSION"),
+            "sites_loaded": self.live_config.load().sites.len(),
+        });
+        let body = serde_json::to_string_pretty(&status).unwrap_or_default();
+        let mut header = ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "application/json")?;
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
 
@@ -244,18 +877,114 @@ impl CdnProxy {
         session.write_response_body(Some("Forbidden\n".into()), true).await?;
         Ok(true)
     }
-}
 
-/// Check if an IP is a private/internal address.
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
+    async fn serve_too_many_requests(
+        &self,
+        session: &mut Session,
+        retry_after: u64,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(429, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        header.insert_header("Retry-After", &retry_after.to_string())?;
+        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_body(Some("Too Many Requests\n".into()), true)
+            .await?;
+        Ok(true)
+    }
+
+    async fn serve_challenge(
+        &self,
+        session: &mut Session,
+        cookie_value: &str,
+    ) -> Result<bool> {
+        use cdn_middleware::cc::action::ChallengeManager;
+        let html = ChallengeManager::challenge_html(cookie_value);
+        let mut header = ResponseHeader::build(503, None)?;
+        header.insert_header("Content-Type", "text/html; charset=utf-8")?;
+        header.insert_header("Content-Length", &html.len().to_string())?;
+        header.insert_header("Cache-Control", "no-store")?;
+        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_body(Some(html.into()), true)
+            .await?;
+        Ok(true)
+    }
+
+    async fn serve_redirect(
+        &self,
+        session: &mut Session,
+        location: &str,
+        status_code: u16,
+        extra_headers: std::collections::HashMap<String, String>,
+        cache_control: Option<&str>,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(status_code, None)?;
+        header.insert_header("Location", location)?;
+        header.insert_header("Content-Length", "0")?;
+        if let Some(cc) = cache_control {
+            header.insert_header("Cache-Control", cc)?;
         }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
+        for (name, value) in &extra_headers {
+            if let (Ok(hn), Ok(hv)) = (
+                http::header::HeaderName::from_bytes(name.as_bytes()),
+                http::header::HeaderValue::from_str(value),
+            ) {
+                header.headers.insert(hn, hv);
+            }
         }
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some("".into()), true).await?;
+        Ok(true)
     }
 }
+
+/// Apply a header operation to a Pingora header (RequestHeader or ResponseHeader).
+///
+/// IMPORTANT: Must use `insert_header()` / `remove_header()` methods instead of
+/// direct `headers.insert()` — Pingora's ResponseHeader maintains a `header_name_map`
+/// for original-case serialization that panics if out of sync with the HeaderMap.
+macro_rules! impl_apply_header_op {
+    ($fn_name:ident, $header_type:ty) => {
+        fn $fn_name(
+            header: &mut $header_type,
+            op: &cdn_middleware::headers::request::HeaderOp,
+        ) {
+            use cdn_common::HeaderAction;
+            let name = op.name.clone();
+            match &op.action {
+                HeaderAction::Set => {
+                    if let Some(ref value) = op.value {
+                        let v = value.clone();
+                        header.insert_header(name, v).ok();
+                    }
+                }
+                HeaderAction::Add => {
+                    if header.headers.get(op.name.as_str()).is_none() {
+                        if let Some(ref value) = op.value {
+                            let v = value.clone();
+                            header.insert_header(name, v).ok();
+                        }
+                    }
+                }
+                HeaderAction::Remove => {
+                    header.remove_header(op.name.as_str());
+                }
+                HeaderAction::Append => {
+                    if let Some(ref value) = op.value {
+                        let new_val = header
+                            .headers
+                            .get(op.name.as_str())
+                            .and_then(|v| v.to_str().ok())
+                            .map(|v| format!("{}, {}", v, value))
+                            .unwrap_or_else(|| value.clone());
+                        header.insert_header(name, new_val).ok();
+                    }
+                }
+            }
+        }
+    };
+}
+
+impl_apply_header_op!(apply_header_op, RequestHeader);
+impl_apply_header_op!(apply_header_op_response, ResponseHeader);

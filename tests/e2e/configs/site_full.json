@@ -1,0 +1,91 @@
+{
+  "site_id": "full",
+  "enabled": true,
+  "domains": ["full.cdn.jam114514.me"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http"
+    },
+    {
+      "id": "origin-2",
+      "host": "127.0.0.1",
+      "port": 8082,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+  "load_balancer": {
+    "algorithm": "round_robin",
+    "retries": 2
+  },
+  "waf": {
+    "enabled": true,
+    "mode": "block",
+    "rules": {
+      "ip_whitelist": ["127.0.0.0/8", "10.0.0.0/8"],
+      "ip_blacklist": ["192.168.200.0/24"]
+    }
+  },
+  "cc": {
+    "enabled": true,
+    "default_rate": 50,
+    "default_window": 60,
+    "default_block_duration": 30,
+    "default_action": "block",
+    "rules": [
+      {
+        "path": "/api/login",
+        "rate": 3,
+        "window": 60,
+        "block_duration": 30,
+        "action": "challenge",
+        "key_type": "ip_path"
+      }
+    ]
+  },
+  "cache": {
+    "enabled": true,
+    "default_ttl": 3600,
+    "rules": [
+      {
+        "type": "extension",
+        "match": ["js", "css", "png"],
+        "ttl": 86400
+      },
+      {
+        "type": "path",
+        "match": "/api",
+        "ttl": 0
+      }
+    ]
+  },
+  "headers": {
+    "response": [
+      {
+        "action": "set",
+        "name": "X-CDN",
+        "value": "nozdormu"
+      },
+      {
+        "action": "set",
+        "name": "Strict-Transport-Security",
+        "value": "max-age=31536000; includeSubDomains"
+      }
+    ]
+  },
+  "compression": {
+    "enabled": true,
+    "algorithms": ["zstd", "brotli", "gzip"],
+    "level": 6,
+    "min_size": 256,
+    "compressible_types": [
+      "text/*",
+      "application/json",
+      "application/javascript"
+    ]
+  }
+}

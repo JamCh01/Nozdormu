@@ -23,11 +23,23 @@ impl LiveConfig {
             for domain in &site.domains {
                 let domain_lower = domain.to_lowercase();
                 if domain_lower.starts_with("*.") {
-                    self.wildcard_index
-                        .insert(domain_lower, site_id.clone());
+                    if let Some(prev) = self.wildcard_index.insert(domain_lower.clone(), site_id.clone()) {
+                        if prev != *site_id {
+                            log::warn!(
+                                "[Config] domain '{}' claimed by both site '{}' and '{}', using '{}'",
+                                domain_lower, prev, site_id, site_id
+                            );
+                        }
+                    }
                 } else {
-                    self.domain_index
-                        .insert(domain_lower, site_id.clone());
+                    if let Some(prev) = self.domain_index.insert(domain_lower.clone(), site_id.clone()) {
+                        if prev != *site_id {
+                            log::warn!(
+                                "[Config] domain '{}' claimed by both site '{}' and '{}', using '{}'",
+                                domain_lower, prev, site_id, site_id
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -72,18 +84,24 @@ impl LiveConfig {
 }
 
 /// Normalize host: strip port, lowercase.
+///
+/// Handles all forms:
+///   `example.com:443`    → `example.com`
+///   `[::1]:8080`         → `::1`
+///   `[2001:db8::1]`      → `2001:db8::1`
+///   `example.com`        → `example.com`
 fn normalize_host(host: &str) -> String {
-    let host = if let Some(pos) = host.rfind(':') {
-        // Only strip if the part after ':' is all digits (port)
-        if host[pos + 1..].chars().all(|c| c.is_ascii_digit()) {
-            &host[..pos]
-        } else {
-            host
-        }
+    let stripped = if let Some(inner) = host.strip_prefix('[') {
+        // RFC 2732 bracket notation — extract address between [ and ]
+        inner.split(']').next().unwrap_or(inner)
     } else {
-        host
+        // IPv4 / hostname — strip trailing `:port` if present
+        match host.rsplit_once(':') {
+            Some((before, port)) if !port.is_empty() && port.as_bytes().iter().all(|b| b.is_ascii_digit()) => before,
+            _ => host,
+        }
     };
-    host.to_lowercase()
+    stripped.to_lowercase()
 }
 
 /// Filter sites by node labels.
@@ -135,7 +153,9 @@ mod tests {
             cc: CcConfig::default(),
             headers: HeadersConfig::default(),
             domain_redirect: None,
+            url_redirect_rules: Vec::new(),
             timeouts: TimeoutsConfig::default(),
+            compression: CompressionConfig::default(),
         }
     }
 
@@ -190,6 +210,19 @@ mod tests {
 
         assert!(config.match_site("example.com").is_some());
         assert!(config.match_site("EXAMPLE.COM").is_some());
+    }
+
+    #[test]
+    fn test_ipv6_host_normalization() {
+        // Bracket notation with port → bare IPv6
+        assert_eq!(super::normalize_host("[::1]:8080"), "::1");
+        assert_eq!(super::normalize_host("[2001:db8::1]:443"), "2001:db8::1");
+        // Bracket notation without port
+        assert_eq!(super::normalize_host("[::1]"), "::1");
+        // Mixed case
+        assert_eq!(super::normalize_host("[2001:DB8::1]:443"), "2001:db8::1");
+        // Malformed (no closing bracket) — take everything after [
+        assert_eq!(super::normalize_host("[::1"), "::1");
     }
 
     #[test]

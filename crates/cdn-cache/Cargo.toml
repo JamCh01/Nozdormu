@@ -16,3 +16,5 @@ md-5 = { workspace = true }
 ring = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
+regex = { workspace = true }
+bytes = { workspace = true }

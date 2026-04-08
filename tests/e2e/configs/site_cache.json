@@ -1,0 +1,43 @@
+{
+  "site_id": "cache",
+  "enabled": true,
+  "domains": ["cache.cdn.jam114514.me"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+  "waf": { "enabled": false },
+  "cc": { "enabled": false },
+  "cache": {
+    "enabled": true,
+    "default_ttl": 3600,
+    "max_size": 10485760,
+    "sort_query_string": true,
+    "vary_headers": [],
+    "cache_authorized": false,
+    "cache_cookies": false,
+    "rules": [
+      {
+        "type": "extension",
+        "match": ["js", "css", "png", "jpg", "svg"],
+        "ttl": 86400
+      },
+      {
+        "type": "path",
+        "match": "/api",
+        "ttl": 0
+      },
+      {
+        "type": "path",
+        "match": "/static",
+        "ttl": 604800
+      }
+    ]
+  },
+  "compression": { "enabled": false }
+}

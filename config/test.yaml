@@ -1,0 +1,25 @@
+---
+# Pingora server configuration — E2E test environment
+version: 1
+threads: 2
+pid_file: /tmp/nozdormu-test.pid
+error_log: /tmp/nozdormu-test-error.log
+upgrade_sock: /tmp/nozdormu-test.sock
+
+# CDN configuration
+cdn:
+  listen: "0.0.0.0:6188"
+  metrics_listen: "0.0.0.0:6190"
+
+  # Static fallback upstreams (used when no site config matches)
+  upstreams:
+    - address: "127.0.0.1:8081"
+      tls: false
+    - address: "127.0.0.1:8082"
+      tls: false
+
+  health_check:
+    interval_secs: 5
+    type: tcp
+
+  load_balancing: round_robin

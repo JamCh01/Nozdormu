@@ -57,6 +57,7 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "clu
 
 # Security
 ipnet = { version = "2", features = ["serde"] }
+prefix-trie = { version = "0.8", features = ["ipnet"] }
 maxminddb = "0.24"
 moka = { version = "0.12", features = ["future"] }
 crc32fast = "1"
@@ -76,6 +77,11 @@ axum = { version = "0.7", features = ["tokio"] }
 
 # DNS
 hickory-resolver = "0.24"
+
+# Compression
+flate2 = "1"
+brotli = "3.5"
+zstd = "0.13"
 
 # Internal crates
 cdn-common = { path = "crates/cdn-common" }

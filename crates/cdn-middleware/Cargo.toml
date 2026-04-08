@@ -11,6 +11,7 @@ log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ipnet = { workspace = true }
+prefix-trie = { workspace = true }
 maxminddb = { workspace = true }
 moka = { workspace = true }
 crc32fast = { workspace = true }
@@ -19,3 +20,5 @@ base64 = { workspace = true }
 regex = { workspace = true }
 tokio = { workspace = true }
 redis = { workspace = true }
+once_cell = { workspace = true }
+prometheus = { workspace = true }

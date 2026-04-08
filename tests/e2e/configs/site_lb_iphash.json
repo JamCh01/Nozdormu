@@ -1,0 +1,29 @@
+{
+  "site_id": "lb-iphash",
+  "enabled": true,
+  "domains": ["lb-iphash.cdn.jam114514.me"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "weight": 10,
+      "protocol": "http"
+    },
+    {
+      "id": "origin-2",
+      "host": "127.0.0.1",
+      "port": 8082,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+  "load_balancer": {
+    "algorithm": "ip_hash",
+    "retries": 2
+  },
+  "waf": { "enabled": false },
+  "cc": { "enabled": false },
+  "cache": { "enabled": false },
+  "compression": { "enabled": false }
+}

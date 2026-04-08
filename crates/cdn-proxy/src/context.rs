@@ -1,7 +1,24 @@
-use cdn_common::{OriginConfig, SiteConfig};
+use cdn_common::{CompressionAlgorithm, OriginConfig, SiteConfig};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Lightweight request ID generator.
+/// Uses a global atomic counter combined with a process-start timestamp
+/// to produce unique, compact IDs without syscalls per request.
+fn generate_request_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    static START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let ts = *START_TS.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64
+    });
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{:x}", ts, count)
+}
 
 /// Per-request context carried through all ProxyHttp callbacks.
 /// Replaces OpenResty's ngx.ctx (which was lost after ngx.exec).
@@ -28,6 +45,11 @@ pub struct ProxyCtx {
     pub cache_ttl: Option<u64>,
     pub resolved_ips: HashMap<String, IpAddr>,
 
+    // === Cached request info (avoids re-extraction in response_filter/logging) ===
+    pub host: String,
+    pub uri: String,
+    pub scheme: String,
+
     // === Set in upstream_peer (balancer phase) ===
     pub selected_origin: Option<OriginConfig>,
     pub balancer_tried: u32,
@@ -35,6 +57,10 @@ pub struct ProxyCtx {
     // === Set in response_body_filter ===
     pub response_body: Option<Vec<Vec<u8>>>,
     pub response_body_size: usize,
+
+    // === Compression state ===
+    pub compressor: Option<crate::compression::Encoder>,
+    pub compression_algorithm: Option<CompressionAlgorithm>,
 }
 
 impl Default for ProxyCtx {
@@ -43,7 +69,7 @@ impl Default for ProxyCtx {
             client_ip: None,
             site_config: None,
             site_id: String::new(),
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id: generate_request_id(),
             geo_info: None,
             waf_blocked: false,
             waf_reason: None,
@@ -54,10 +80,15 @@ impl Default for ProxyCtx {
             cache_key: None,
             cache_ttl: None,
             resolved_ips: HashMap::new(),
+            host: String::new(),
+            uri: String::new(),
+            scheme: String::new(),
             selected_origin: None,
             balancer_tried: 0,
             response_body: None,
             response_body_size: 0,
+            compressor: None,
+            compression_algorithm: None,
         }
     }
 }

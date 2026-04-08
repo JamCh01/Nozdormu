@@ -8,6 +8,10 @@ rust-version.workspace = true
 name = "cdn-proxy"
 path = "src/main.rs"
 
+[lib]
+name = "cdn_proxy"
+path = "src/lib.rs"
+
 [dependencies]
 cdn-common = { workspace = true }
 cdn-config = { workspace = true }
@@ -35,7 +39,12 @@ ring = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }
 ipnet = { workspace = true }
+http = { workspace = true }
 chrono = { workspace = true }
+flate2 = { workspace = true }
+brotli = { workspace = true }
+zstd = { workspace = true }
+bytes = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 jemallocator = "0.5"

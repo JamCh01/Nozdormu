@@ -1,3 +1,3 @@
 pub mod endpoints;
 
-// Admin API: Axum on 127.0.0.1:8080.
+pub use endpoints::{admin_router, start_admin_server, AdminState};

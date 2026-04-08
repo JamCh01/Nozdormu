@@ -1,1 +1,237 @@
-// Dual-layer cache storage: Redis metadata + OSS/S3 data body.
+use crate::key::cache_object_path;
+use crate::oss::{OssClient, OssError};
+use cdn_common::RedisOps;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Cached response metadata (stored in Redis).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheMeta {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub cached_at: i64,   // Unix timestamp
+    pub expires_at: i64,  // Unix timestamp
+    pub size: u64,
+    pub etag: Option<String>,
+}
+
+/// Full cached response (metadata + body).
+#[derive(Debug)]
+pub struct CachedResponse {
+    pub meta: CacheMeta,
+    pub body: Vec<u8>,
+}
+
+/// Cache storage: Redis metadata + OSS/S3 data body.
+///
+/// Read flow:
+/// 1. Redis GET meta → miss = None
+/// 2. Check expires_at → expired = None
+/// 3. OSS GET body → failure = cleanup Redis, None
+///
+/// Write flow:
+/// 1. OSS PUT body
+/// 2. Redis SETEX meta (TTL = expires_at - now)
+pub struct CacheStorage {
+    oss: Option<Arc<OssClient>>,
+    redis: Option<Arc<dyn RedisOps>>,
+}
+
+impl CacheStorage {
+    /// Create a new CacheStorage with an OSS client and optional Redis.
+    pub fn new(oss: Option<Arc<OssClient>>, redis: Option<Arc<dyn RedisOps>>) -> Self {
+        Self { oss, redis }
+    }
+
+    /// Create a disabled CacheStorage (no backend).
+    pub fn disabled() -> Self {
+        Self { oss: None, redis: None }
+    }
+
+    /// Check if storage is available.
+    pub fn is_available(&self) -> bool {
+        self.oss.is_some()
+    }
+
+    /// Read a cached response.
+    /// Returns None on miss, expiry, or error.
+    pub async fn get(
+        &self,
+        site_id: &str,
+        cache_key: &str,
+    ) -> Option<CachedResponse> {
+        let oss = self.oss.as_ref()?;
+        let object_path = cache_object_path(site_id, cache_key);
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+
+        // Step 1: Try Redis metadata first
+        if let Some(ref redis) = self.redis {
+            if let Some(meta_json) = redis.get(&redis_key).await {
+                if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
+                    let now = chrono::Utc::now().timestamp();
+                    if meta.expires_at <= now {
+                        log::debug!("[Cache] expired meta: {}", object_path);
+                        let redis = Arc::clone(redis);
+                        let rk = redis_key.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = redis.del(&rk).await {
+                                log::warn!("[Cache] background Redis DEL failed: {} - {}", rk, e);
+                            }
+                        });
+                        return None;
+                    }
+                    // Step 2: Fetch body from OSS
+                    match oss.get_object(&object_path).await {
+                        Ok(body) => return Some(CachedResponse { meta, body }),
+                        Err(e) => {
+                            log::warn!("[Cache] OSS get failed after meta hit: {}", e);
+                            let redis = Arc::clone(redis);
+                            let rk = redis_key.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = redis.del(&rk).await {
+                                    log::warn!("[Cache] background Redis DEL failed: {} - {}", rk, e);
+                                }
+                            });
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: OSS-only path (no Redis metadata available).
+        // Use a short TTL since we can't verify actual expiry.
+        match oss.get_object(&object_path).await {
+            Ok(data) => {
+                let now = chrono::Utc::now().timestamp();
+                log::debug!("[Cache] OSS hit (no meta, stale-eligible): {}", object_path);
+                Some(CachedResponse {
+                    meta: CacheMeta {
+                        status: 200,
+                        headers: HashMap::new(),
+                        cached_at: now,
+                        expires_at: now + 60, // 60s conservative TTL — caller should revalidate
+                        size: data.len() as u64,
+                        etag: None,
+                    },
+                    body: data,
+                })
+            }
+            Err(OssError::NotFound) => {
+                log::debug!("[Cache] miss: {}", object_path);
+                None
+            }
+            Err(e) => {
+                log::error!("[Cache] OSS get error: {} - {}", object_path, e);
+                None
+            }
+        }
+    }
+
+    /// Write a response to cache.
+    /// This is called asynchronously (fire-and-forget via tokio::spawn).
+    pub async fn put(
+        &self,
+        site_id: &str,
+        cache_key: &str,
+        meta: &CacheMeta,
+        body: Vec<u8>,
+    ) -> Result<(), String> {
+        let oss = self.oss.as_ref().ok_or("OSS not configured")?;
+        let object_path = cache_object_path(site_id, cache_key);
+
+        // Determine content type from meta headers
+        let content_type = meta
+            .headers
+            .get("content-type")
+            .map(|s| s.as_str())
+            .unwrap_or("application/octet-stream");
+
+        // Step 1: OSS PUT body
+        oss.put_object(&object_path, body, content_type)
+            .await
+            .map_err(|e| format!("OSS put error: {}", e))?;
+
+        // Step 2: Redis SETEX meta
+        let meta_json = serde_json::to_string(meta)
+            .map_err(|e| format!("meta serialize error: {}", e))?;
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+        let ttl = (meta.expires_at - chrono::Utc::now().timestamp()).clamp(1, 86400 * 365) as u64;
+
+        if let Some(ref redis) = self.redis {
+            if let Err(e) = redis.setex(&redis_key, ttl, &meta_json).await {
+                log::warn!("[Cache] Redis SETEX failed: {} - {}", redis_key, e);
+            }
+        }
+
+        log::debug!(
+            "[Cache] stored: {} ({} bytes, ttl={}s)",
+            object_path, meta.size, ttl
+        );
+
+        Ok(())
+    }
+
+    /// Delete a cached response.
+    pub async fn delete(
+        &self,
+        site_id: &str,
+        cache_key: &str,
+    ) -> Result<(), String> {
+        let oss = self.oss.as_ref().ok_or("OSS not configured")?;
+        let object_path = cache_object_path(site_id, cache_key);
+
+        oss.delete_object(&object_path)
+            .await
+            .map_err(|e| format!("OSS delete error: {}", e))?;
+
+        // Redis DEL meta
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+        if let Some(ref redis) = self.redis {
+            if let Err(e) = redis.del(&redis_key).await {
+                log::warn!("[Cache] Redis DEL failed: {} - {}", redis_key, e);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Build CacheMeta from response status and headers.
+pub fn build_cache_meta(
+    status: u16,
+    headers: &[(String, String)],
+    ttl: u64,
+    body_size: u64,
+) -> CacheMeta {
+    let now = chrono::Utc::now().timestamp();
+    let etag = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("etag"))
+        .map(|(_, v)| v.clone());
+
+    let filtered_headers: HashMap<String, String> = headers
+        .iter()
+        .filter(|(k, _)| {
+            !crate::strategy::EXCLUDED_RESPONSE_HEADERS
+                .iter()
+                .any(|ex| k.eq_ignore_ascii_case(ex))
+        })
+        .cloned()
+        .collect();
+
+    CacheMeta {
+        status,
+        headers: filtered_headers,
+        cached_at: now,
+        expires_at: {
+            // Cap TTL to 10 years to prevent i64 overflow
+            const MAX_TTL: u64 = 86400 * 365 * 10;
+            let capped = ttl.min(MAX_TTL) as i64;
+            now.saturating_add(capped)
+        },
+        size: body_size,
+        etag,
+    }
+}
