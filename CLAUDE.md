@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (244 unit/integration tests across 4 crates)
+# Run all tests (243 unit/integration tests across 4 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -47,6 +47,13 @@ crates/
 ```
 
 Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-middleware` ← `cdn-proxy`
+
+## Configuration Examples
+
+Detailed JSON examples with inline documentation for every config option:
+
+- **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression
+- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, ssl, full
 
 ## Architecture Essentials
 

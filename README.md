@@ -210,6 +210,8 @@ Changes are picked up automatically via etcd watch (no restart needed). Manual r
 curl -X POST http://localhost:8080/reload
 ```
 
+See [`docs/global/`](docs/global/) for all global config examples and [`docs/site/`](docs/site/) for all site config examples.
+
 ## Ports
 
 | Port | Service |
@@ -221,7 +223,7 @@ curl -X POST http://localhost:8080/reload
 ## Development
 
 ```bash
-# Run unit/integration tests (244 tests)
+# Run unit/integration tests (243 tests)
 cargo test
 
 # Lint
