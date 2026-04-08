@@ -190,7 +190,7 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
     ]
   },
   "protocol": {
-    "force_https": { "enable": true, "https_port": 443, "redirect_code": 301 },
+    "force_https": { "enable": true, "https_port": 443, "redirect_code": 301, "exclude_paths": ["/health", "/.well-known/"] },
     "websocket": { "enable": true },
     "grpc": { "enabled": true }
   },
