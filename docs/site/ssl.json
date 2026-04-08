@@ -1,0 +1,28 @@
+{
+  "_doc": "SSL/TLS 站点级配置 — ACME 自动证书 vs 自定义证书",
+
+  "site_id": "ssl-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["secure.example.com", "*.secure.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "ssl": {
+    "enabled": true,
+
+    "_type": "acme = 自动申请/续期证书 | custom = 使用手动上传的证书",
+    "type": "acme",
+
+    "_acme_email": "ACME 联系邮箱，覆盖全局 ssl.acme_email",
+    "acme_email": "ssl-admin@example.com"
+  },
+
+  "protocol": {
+    "force_https": {
+      "enable": true,
+      "redirect_code": 301
+    }
+  }
+}

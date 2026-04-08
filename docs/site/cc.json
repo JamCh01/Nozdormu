@@ -1,0 +1,68 @@
+{
+  "_doc": "CC 限流配置详解 — 全局限流 + 路径级规则 + 多种动作",
+
+  "site_id": "cc-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["api.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "cc": {
+    "enabled": true,
+
+    "_default_rate": "全站默认：每个窗口允许的最大请求数",
+    "default_rate": 100,
+
+    "_default_window": "全站默认：窗口时长（秒）",
+    "default_window": 60,
+
+    "_default_block_duration": "全站默认：触发限流后封禁时长（秒）",
+    "default_block_duration": 600,
+
+    "_default_action": "block = 返回 429 | challenge = JS 验证 | log = 仅记录 | delay = 延迟响应",
+    "default_action": "block",
+
+    "_rules": "路径级规则，按最长前缀匹配。路径规则优先于全站默认值。",
+    "rules": [
+      {
+        "_doc": "登录接口 — 严格限流 + JS Challenge",
+        "path": "/api/login",
+        "rate": 5,
+        "window": 60,
+        "block_duration": 1800,
+        "action": "challenge",
+        "_key_type": "ip = 仅按 IP | ip_url = 按 IP+完整URL | ip_path = 按 IP+路径（忽略查询参数）",
+        "key_type": "ip"
+      },
+      {
+        "_doc": "注册接口 — 中等限流 + 直接封禁",
+        "path": "/api/register",
+        "rate": 3,
+        "window": 300,
+        "block_duration": 3600,
+        "action": "block",
+        "key_type": "ip"
+      },
+      {
+        "_doc": "API 数据接口 — 宽松限流 + 仅记录",
+        "path": "/api/data",
+        "rate": 200,
+        "window": 60,
+        "block_duration": 60,
+        "action": "log",
+        "key_type": "ip_path"
+      },
+      {
+        "_doc": "搜索接口 — 延迟响应（降速不封禁）",
+        "path": "/api/search",
+        "rate": 30,
+        "window": 60,
+        "block_duration": 30,
+        "action": "delay",
+        "key_type": "ip_url"
+      }
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "_doc": "负载均衡 — 主备故障转移",
+  "_desc": "正常情况下只使用主源站（backup=false），当所有主源站不健康时自动切换到备份源站（backup=true）。",
+
+  "site_id": "lb-failover",
+  "enabled": true,
+  "port": 80,
+  "domains": ["ha.example.com"],
+  "origins": [
+    {
+      "_doc": "主源站 — 正常流量",
+      "id": "primary",
+      "host": "primary.backend.com",
+      "port": 443,
+      "weight": 10,
+      "protocol": "https",
+      "backup": false,
+      "verify_ssl": true
+    },
+    {
+      "_doc": "备份源站 — 仅在主源站全部不健康时启用",
+      "id": "backup",
+      "host": "backup.backend.com",
+      "port": 443,
+      "weight": 10,
+      "protocol": "https",
+      "backup": true,
+      "verify_ssl": true
+    }
+  ],
+  "load_balancer": {
+    "algorithm": "round_robin",
+    "retries": 2,
+    "health_check": {
+      "enabled": true,
+      "type": "http",
+      "path": "/ping",
+      "interval": 5,
+      "timeout": 3,
+      "healthy_threshold": 2,
+      "unhealthy_threshold": 2
+    }
+  }
+}

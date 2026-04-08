@@ -1,0 +1,52 @@
+{
+  "_doc": "Origin 配置详解 — 多源站 + 备份源站 + HTTPS 回源 + SNI",
+
+  "site_id": "multi-origin",
+  "enabled": true,
+  "port": 80,
+  "domains": ["app.example.com"],
+
+  "_target_labels": "标签选择器，仅匹配带有这些标签的 CDN 节点才会加载此站点",
+  "target_labels": ["region:asia", "tier:edge"],
+
+  "origins": [
+    {
+      "id": "primary-1",
+      "host": "backend-1.example.com",
+      "port": 443,
+      "_weight": "权重 1-100，round_robin 模式下权重越高分配的请求越多",
+      "weight": 60,
+      "_protocol": "http | https — 回源协议",
+      "protocol": "https",
+      "backup": false,
+      "enabled": true,
+      "_sni": "TLS 握手时发送的 SNI 主机名，默认使用 host 字段",
+      "sni": "backend-1.example.com",
+      "_verify_ssl": "是否验证上游 SSL 证书",
+      "verify_ssl": true,
+      "_target_labels": "源站级标签选择器",
+      "target_labels": []
+    },
+    {
+      "id": "primary-2",
+      "host": "backend-2.example.com",
+      "port": 443,
+      "weight": 40,
+      "protocol": "https",
+      "backup": false,
+      "enabled": true,
+      "sni": null,
+      "verify_ssl": true
+    },
+    {
+      "_doc": "备份源站 — 仅在所有主源站不健康时启用",
+      "id": "backup-1",
+      "host": "fallback.example.com",
+      "port": 80,
+      "weight": 10,
+      "protocol": "http",
+      "backup": true,
+      "enabled": true
+    }
+  ]
+}

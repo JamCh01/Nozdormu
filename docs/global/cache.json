@@ -1,0 +1,21 @@
+{
+  "_doc": "etcd key: {prefix}/global/cache — OSS/S3 缓存后端配置",
+
+  "endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+  "bucket": "cdn-cache",
+  "region": "cn-hangzhou",
+  "access_key_id": "LTAI5t...",
+  "secret_access_key": "HhJr8G...",
+
+  "_use_ssl": "是否使用 HTTPS 连接 OSS",
+  "use_ssl": true,
+
+  "_path_style": "true = http://endpoint/bucket/key, false = http://bucket.endpoint/key",
+  "path_style": false,
+
+  "_default_ttl": "缓存默认 TTL（秒），站点级规则可覆盖",
+  "default_ttl": 3600,
+
+  "_max_size": "单个缓存对象最大字节数（默认 100MB）",
+  "max_size": 104857600
+}

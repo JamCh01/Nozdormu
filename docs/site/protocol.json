@@ -1,0 +1,59 @@
+{
+  "_doc": "协议配置详解 — HTTPS 强制跳转 + WebSocket + SSE + gRPC",
+
+  "site_id": "protocol-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["app.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "protocol": {
+    "force_https": {
+      "_enable": "开启后，所有 HTTP 请求会被重定向到 HTTPS",
+      "enable": true,
+
+      "_redirect_code": "重定向状态码: 301(永久) | 302(临时) | 307(保持方法) | 308(永久+保持方法)",
+      "redirect_code": 301,
+
+      "_https_port": "HTTPS 目标端口，null 或 443 时 URL 中省略端口号",
+      "https_port": null,
+
+      "_exclude_paths": "排除路径列表（前缀匹配），这些路径不会被重定向",
+      "_exclude_paths_note": "/.well-known/acme-challenge/ 始终自动排除，无需手动添加",
+      "exclude_paths": ["/health", "/api/webhook"]
+    },
+
+    "_http2": "是否启用 HTTP/2",
+    "http2": true,
+
+    "websocket": {
+      "_enable": "开启后，带 Upgrade: websocket 头的请求会被识别为 WebSocket 并透传",
+      "enable": true
+    },
+
+    "sse": {
+      "_enable": "开启后，Accept: text/event-stream 的请求会被识别为 SSE 并使用长连接超时",
+      "enable": true
+    },
+
+    "grpc": {
+      "_enabled": "开启后，Content-Type: application/grpc* 的请求会被识别为 gRPC",
+      "enabled": true,
+
+      "_mode": "layer7 = 解析 gRPC 帧进行路由 | layer4 = 纯 TCP 透传",
+      "mode": "layer7",
+
+      "_services": "gRPC 服务白名单（package.Service 格式），空列表 = 允许所有服务",
+      "services": ["myapp.UserService", "myapp.OrderService"]
+    }
+  },
+
+  "_timeouts": "站点级超时配置，覆盖全局 proxy 超时",
+  "timeouts": {
+    "connect": 5,
+    "send": 30,
+    "read": 30
+  }
+}

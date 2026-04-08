@@ -1,0 +1,9 @@
+{
+  "_doc": "etcd key: {prefix}/global/logging",
+
+  "_push_to_redis": "是否将请求日志推送到 Redis Streams",
+  "push_to_redis": true,
+
+  "_stream_max_len": "Redis Stream 最大长度，超出后自动裁剪旧条目",
+  "stream_max_len": 100000
+}

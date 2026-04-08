@@ -1,0 +1,74 @@
+{
+  "_doc": "重定向配置详解 — 域名重定向 + URL 规则（精确/前缀/正则/域名）",
+  "_priority": "优先级: 域名重定向 > 协议重定向(force_https) > URL 规则",
+
+  "site_id": "redirect-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["new.example.com", "old.example.com", "legacy.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "_domain_redirect": "域名级重定向 — 将旧域名的所有请求重定向到目标域名",
+  "domain_redirect": {
+    "enabled": true,
+    "target_domain": "new.example.com",
+    "_source_domains": "需要重定向的源域名列表，不在列表中的域名不受影响",
+    "source_domains": ["old.example.com", "legacy.example.com"],
+    "status_code": 301
+  },
+
+  "_url_redirect_rules": "URL 级重定向规则，按数组顺序匹配，命中第一条即返回",
+  "url_redirect_rules": [
+    {
+      "_doc": "精确匹配 — /old-page 精确等于时才重定向",
+      "type": "exact",
+      "source": "/old-page",
+      "target": "/new-page",
+      "status_code": 302,
+      "enabled": true,
+      "preserve_query_string": true
+    },
+    {
+      "_doc": "前缀匹配 — /old/ 开头的路径，$1 为去掉前缀后的剩余部分",
+      "type": "prefix",
+      "source": "/old/",
+      "target": "/new/$1",
+      "status_code": 301,
+      "enabled": true,
+      "preserve_query_string": true
+    },
+    {
+      "_doc": "正则匹配 — 捕获组 $1 $2 可用于 target",
+      "type": "regex",
+      "source": "^/post/(\\d+)$",
+      "target": "/article/$1",
+      "status_code": 301,
+      "enabled": true,
+      "preserve_query_string": false,
+      "_regex_options": "i = 忽略大小写",
+      "regex_options": null
+    },
+    {
+      "_doc": "域名匹配 — 仅对特定源域名生效的规则",
+      "type": "domain",
+      "source": "/",
+      "source_domain": "legacy.example.com",
+      "target": "https://new.example.com/legacy",
+      "status_code": 308,
+      "enabled": true,
+      "preserve_query_string": true,
+      "_methods": "限制 HTTP 方法，空列表 = 所有方法",
+      "methods": ["GET"],
+      "_match_query_string": "是否将查询参数纳入 source 匹配",
+      "match_query_string": false,
+      "_cache_control": "重定向响应的 Cache-Control 头",
+      "cache_control": "public, max-age=86400",
+      "_response_headers": "重定向响应附加的自定义头",
+      "response_headers": {
+        "X-Redirect-Reason": "domain-migration"
+      }
+    }
+  ]
+}

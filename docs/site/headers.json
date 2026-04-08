@@ -1,0 +1,88 @@
+{
+  "_doc": "Header 操作配置详解 — 请求头/响应头的增删改",
+
+  "site_id": "headers-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["headers.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "headers": {
+    "_request": "请求头操作 — 在转发到上游之前修改请求头",
+    "request": [
+      {
+        "_doc": "set — 设置头（已存在则覆盖）",
+        "action": "set",
+        "name": "X-Forwarded-Proto",
+        "value": "https"
+      },
+      {
+        "_doc": "add — 仅在头不存在时添加",
+        "action": "add",
+        "name": "X-Custom-Request",
+        "value": "nozdormu-cdn"
+      },
+      {
+        "_doc": "remove — 删除头",
+        "action": "remove",
+        "name": "X-Debug-Token",
+        "value": null
+      }
+    ],
+
+    "_response": "响应头操作 — 在返回给客户端之前修改响应头",
+    "_response_variables": "value 支持变量替换: ${client_ip} ${host} ${request_id} ${cache_status} ${scheme}",
+    "response": [
+      {
+        "_doc": "set — 安全头",
+        "action": "set",
+        "name": "X-Frame-Options",
+        "value": "DENY"
+      },
+      {
+        "_doc": "set — HSTS",
+        "action": "set",
+        "name": "Strict-Transport-Security",
+        "value": "max-age=31536000; includeSubDomains"
+      },
+      {
+        "_doc": "set — 使用变量替换",
+        "action": "set",
+        "name": "X-Client-IP",
+        "value": "${client_ip}"
+      },
+      {
+        "_doc": "set — 缓存状态",
+        "action": "set",
+        "name": "X-Cache-Result",
+        "value": "${cache_status}"
+      },
+      {
+        "_doc": "add — 仅在不存在时添加",
+        "action": "add",
+        "name": "X-CDN-Node",
+        "value": "nozdormu-edge-01"
+      },
+      {
+        "_doc": "append — 追加到已有值后面（逗号分隔）",
+        "action": "append",
+        "name": "X-Served-By",
+        "value": "nozdormu"
+      },
+      {
+        "_doc": "remove — 删除上游返回的敏感头",
+        "action": "remove",
+        "name": "X-Powered-By",
+        "value": null
+      },
+      {
+        "_doc": "remove — 删除上游内部标识",
+        "action": "remove",
+        "name": "X-Backend-Id",
+        "value": null
+      }
+    ]
+  }
+}

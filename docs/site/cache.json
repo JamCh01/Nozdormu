@@ -1,0 +1,69 @@
+{
+  "_doc": "缓存配置详解 — 多种规则类型 + 缓存键控制",
+
+  "site_id": "cache-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["cdn.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "cache": {
+    "enabled": true,
+
+    "_default_ttl": "默认缓存 TTL（秒），未匹配任何规则时使用",
+    "default_ttl": 3600,
+
+    "_max_size": "单个缓存对象最大字节数",
+    "max_size": 104857600,
+
+    "_sort_query_string": "对查询参数排序后生成缓存键，?a=1&b=2 和 ?b=2&a=1 命中同一缓存",
+    "sort_query_string": true,
+
+    "_vary_headers": "将这些请求头纳入缓存键，不同值产生不同缓存条目",
+    "vary_headers": ["Accept-Language"],
+
+    "_cache_authorized": "是否缓存带 Authorization 头的请求（默认不缓存）",
+    "cache_authorized": false,
+
+    "_cache_cookies": "是否缓存带 Set-Cookie 的响应（默认不缓存）",
+    "cache_cookies": false,
+
+    "_rules": "缓存规则列表，按顺序匹配。type: path | extension | mimetype | regex",
+    "rules": [
+      {
+        "_doc": "按文件扩展名 — 静态资源长缓存",
+        "type": "extension",
+        "match": ["js", "css", "png", "jpg", "jpeg", "gif", "webp", "woff2", "svg", "ico"],
+        "ttl": 86400
+      },
+      {
+        "_doc": "按路径前缀 — API 不缓存",
+        "type": "path",
+        "match": "/api",
+        "ttl": 0
+      },
+      {
+        "_doc": "按路径前缀 — 静态目录长缓存",
+        "type": "path",
+        "match": "/static",
+        "ttl": 604800
+      },
+      {
+        "_doc": "按 MIME 类型",
+        "type": "mimetype",
+        "match": ["text/html", "text/css", "application/javascript"],
+        "ttl": 1800
+      },
+      {
+        "_doc": "按正则表达式 — 版本化资源永久缓存",
+        "type": "regex",
+        "match": "\\.(js|css)\\?v=[a-f0-9]+$",
+        "ttl": 31536000,
+        "_regex_options": "i = 忽略大小写",
+        "regex_options": "i"
+      }
+    ]
+  }
+}

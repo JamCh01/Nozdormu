@@ -1,0 +1,20 @@
+{
+  "_doc": "etcd key: {prefix}/global/redis",
+
+  "_sentinel_mode": "Redis Sentinel (高可用，推荐生产环境)",
+  "mode": "sentinel",
+  "password": "your_redis_password",
+  "db": 0,
+  "sentinel": {
+    "master_name": "mymaster",
+    "nodes": [
+      "sentinel1:26379",
+      "sentinel2:26379",
+      "sentinel3:26379"
+    ]
+  },
+  "connect_timeout_ms": 5000,
+  "send_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "pool_size": 200
+}

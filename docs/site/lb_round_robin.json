@@ -1,0 +1,32 @@
+{
+  "_doc": "负载均衡 — 加权轮询（round_robin）",
+  "_desc": "按权重比例轮流分配请求。weight=60 和 weight=40 表示约 60%/40% 的流量分配。",
+
+  "site_id": "lb-round-robin",
+  "enabled": true,
+  "port": 80,
+  "domains": ["rr.example.com"],
+  "origins": [
+    { "id": "web-1", "host": "10.0.1.1", "port": 8080, "weight": 60, "protocol": "http" },
+    { "id": "web-2", "host": "10.0.1.2", "port": 8080, "weight": 40, "protocol": "http" }
+  ],
+  "load_balancer": {
+    "algorithm": "round_robin",
+    "_retries": "请求失败后重试次数（0-10），会自动跳过失败的源站",
+    "retries": 2,
+    "health_check": {
+      "enabled": true,
+      "_type": "http | tcp — HTTP 检查会请求 path 并验证 2xx 响应",
+      "type": "http",
+      "path": "/health",
+      "_interval": "检查间隔（秒）",
+      "interval": 10,
+      "_timeout": "单次检查超时（秒）",
+      "timeout": 5,
+      "_healthy_threshold": "连续成功 N 次后标记为健康",
+      "healthy_threshold": 2,
+      "_unhealthy_threshold": "连续失败 N 次后标记为不健康",
+      "unhealthy_threshold": 3
+    }
+  }
+}

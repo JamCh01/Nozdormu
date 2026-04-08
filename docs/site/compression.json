@@ -1,0 +1,36 @@
+{
+  "_doc": "压缩配置详解 — 站点级覆盖全局默认",
+  "_skip_conditions": "以下情况自动跳过压缩: WebSocket/SSE/gRPC 连接、响应体小于 min_size、不可压缩的 MIME 类型、客户端不支持（无 Accept-Encoding）",
+
+  "site_id": "compress-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["fast.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "compression": {
+    "enabled": true,
+
+    "_algorithms": "按优先级排列，与客户端 Accept-Encoding 协商选择最优算法",
+    "_algorithms_note": "zstd 压缩率最高、brotli 次之、gzip 兼容性最好",
+    "algorithms": ["zstd", "brotli", "gzip"],
+
+    "_level": "压缩级别 1-9: 1=最快/压缩率低, 6=平衡, 9=最慢/压缩率高",
+    "level": 6,
+
+    "_min_size": "响应体小于此字节数时不压缩（避免小文件压缩后反而变大）",
+    "min_size": 256,
+
+    "_compressible_types": "可压缩的 MIME 类型列表，支持通配符 text/*",
+    "compressible_types": [
+      "text/*",
+      "application/json",
+      "application/javascript",
+      "application/xml",
+      "application/wasm",
+      "image/svg+xml"
+    ]
+  }
+}

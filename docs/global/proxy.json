@@ -1,0 +1,21 @@
+{
+  "_doc": "etcd key: {prefix}/global/proxy",
+
+  "_connect_timeout": "连接上游的超时时间（秒）",
+  "connect_timeout": 10,
+
+  "_send_timeout": "向上游发送请求体的超时时间（秒）",
+  "send_timeout": 60,
+
+  "_read_timeout": "等待上游响应的超时时间（秒）",
+  "read_timeout": 60,
+
+  "_websocket_timeout": "WebSocket 连接空闲超时（秒），默认 1 小时",
+  "websocket_timeout": 3600,
+
+  "_sse_timeout": "Server-Sent Events 连接超时（秒），默认 24 小时",
+  "sse_timeout": 86400,
+
+  "_grpc_timeout": "gRPC 流超时（秒），默认 5 分钟",
+  "grpc_timeout": 300
+}

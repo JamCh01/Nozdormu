@@ -1,0 +1,24 @@
+{
+  "_doc": "etcd key: {prefix}/global/balancer",
+
+  "_default_algorithm": "round_robin | ip_hash | random — 站点未指定时使用此默认值",
+  "default_algorithm": "round_robin",
+
+  "_default_retries": "上游请求失败后的重试次数（0-10）",
+  "default_retries": 2,
+
+  "_dns_nameservers": "用于解析 origin host 的 DNS 服务器",
+  "dns_nameservers": ["8.8.8.8", "8.8.4.4"],
+
+  "_health_check_interval": "被动健康检查统计间隔（秒）",
+  "health_check_interval": 10,
+
+  "_health_check_timeout": "健康检查超时（秒）",
+  "health_check_timeout": 5,
+
+  "_healthy_threshold": "连续成功多少次后标记为健康",
+  "healthy_threshold": 2,
+
+  "_unhealthy_threshold": "连续失败多少次后标记为不健康",
+  "unhealthy_threshold": 3
+}

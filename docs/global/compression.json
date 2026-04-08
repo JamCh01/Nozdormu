@@ -1,0 +1,27 @@
+{
+  "_doc": "etcd key: {prefix}/global/compression — 全局默认压缩配置，站点级可覆盖",
+
+  "enabled": true,
+
+  "_algorithms": "压缩算法优先级列表，按顺序与客户端 Accept-Encoding 协商。可选: zstd, brotli, gzip",
+  "algorithms": ["zstd", "brotli", "gzip"],
+
+  "_level": "压缩级别 1-9，越高压缩率越好但 CPU 开销越大",
+  "level": 6,
+
+  "_min_size": "响应体小于此字节数时不压缩",
+  "min_size": 256,
+
+  "_compressible_types": "可压缩的 MIME 类型，支持通配符 text/*",
+  "compressible_types": [
+    "text/*",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/xhtml+xml",
+    "application/rss+xml",
+    "application/atom+xml",
+    "application/wasm",
+    "image/svg+xml"
+  ]
+}

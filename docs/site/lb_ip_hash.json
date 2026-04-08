@@ -1,0 +1,26 @@
+{
+  "_doc": "负载均衡 — IP 哈希（ip_hash）",
+  "_desc": "根据客户端 IP 哈希选择源站，同一 IP 始终路由到同一后端。适合有状态会话（session sticky）场景。",
+
+  "site_id": "lb-ip-hash",
+  "enabled": true,
+  "port": 80,
+  "domains": ["sticky.example.com"],
+  "origins": [
+    { "id": "app-1", "host": "10.0.2.1", "port": 3000, "weight": 10, "protocol": "http" },
+    { "id": "app-2", "host": "10.0.2.2", "port": 3000, "weight": 10, "protocol": "http" },
+    { "id": "app-3", "host": "10.0.2.3", "port": 3000, "weight": 10, "protocol": "http" }
+  ],
+  "load_balancer": {
+    "algorithm": "ip_hash",
+    "retries": 1,
+    "health_check": {
+      "enabled": true,
+      "type": "tcp",
+      "interval": 5,
+      "timeout": 3,
+      "healthy_threshold": 1,
+      "unhealthy_threshold": 2
+    }
+  }
+}

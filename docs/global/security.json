@@ -1,0 +1,29 @@
+{
+  "_doc": "etcd key: {prefix}/global/security",
+
+  "_waf_default_mode": "block = 拦截, log = 仅记录不拦截",
+  "waf_default_mode": "block",
+
+  "_cc_default_rate": "默认每个窗口允许的请求数",
+  "cc_default_rate": 100,
+
+  "_cc_default_window": "默认窗口时长（秒）",
+  "cc_default_window": 60,
+
+  "_cc_default_block_duration": "触发限流后封禁时长（秒）",
+  "cc_default_block_duration": 600,
+
+  "_cc_challenge_secret": "CC JS Challenge 的 HMAC-SHA256 签名密钥，生产环境必须修改",
+  "cc_challenge_secret": "a_random_secret_at_least_32_chars_long",
+
+  "_trusted_proxies": "受信任的反向代理 CIDR，用于 X-Forwarded-For 解析时跳过这些 IP",
+  "trusted_proxies": [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ],
+
+  "_admin_token": "Admin API 的 Bearer Token 认证，为 null 时不启用认证（仅限 localhost 访问）",
+  "admin_token": "my_admin_bearer_token"
+}

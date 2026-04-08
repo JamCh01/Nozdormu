@@ -1,0 +1,19 @@
+{
+  "_doc": "负载均衡 — 随机（random）",
+  "_desc": "随机选择一个健康的源站。适合无状态服务，简单且分布均匀。",
+
+  "site_id": "lb-random",
+  "enabled": true,
+  "port": 80,
+  "domains": ["random.example.com"],
+  "origins": [
+    { "id": "node-1", "host": "10.0.3.1", "port": 8080, "weight": 10, "protocol": "http" },
+    { "id": "node-2", "host": "10.0.3.2", "port": 8080, "weight": 10, "protocol": "http" },
+    { "id": "node-3", "host": "10.0.3.3", "port": 8080, "weight": 10, "protocol": "http" },
+    { "id": "node-4", "host": "10.0.3.4", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+  "load_balancer": {
+    "algorithm": "random",
+    "retries": 3
+  }
+}

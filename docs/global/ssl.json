@@ -1,0 +1,22 @@
+{
+  "_doc": "etcd key: {prefix}/global/ssl — ACME 自动证书管理",
+
+  "_acme_environment": "production = 正式证书, staging = 测试证书（不受信任，用于调试）",
+  "acme_environment": "production",
+
+  "acme_email": "admin@example.com",
+
+  "_renewal_days": "证书到期前多少天开始续期",
+  "renewal_days": 30,
+
+  "_acme_providers": "ACME 提供商优先级列表，按顺序尝试",
+  "acme_providers": ["letsencrypt", "zerossl", "buypass", "google"],
+
+  "_eab_credentials": "部分提供商（ZeroSSL、Google）需要 External Account Binding 凭证",
+  "eab_credentials": {
+    "zerossl_kid": "your_zerossl_kid",
+    "zerossl_hmac_key": "your_zerossl_hmac_key",
+    "google_kid": null,
+    "google_hmac_key": null
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "_doc": "完整站点配置 — 所有功能组合示例",
+
+  "site_id": "production-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["www.example.com", "example.com", "*.cdn.example.com"],
+  "target_labels": ["region:asia", "tier:edge"],
+
+  "origins": [
+    {
+      "id": "primary-1",
+      "host": "backend-1.example.com",
+      "port": 443,
+      "weight": 60,
+      "protocol": "https",
+      "backup": false,
+      "enabled": true,
+      "sni": "backend-1.example.com",
+      "verify_ssl": true
+    },
+    {
+      "id": "primary-2",
+      "host": "backend-2.example.com",
+      "port": 443,
+      "weight": 40,
+      "protocol": "https",
+      "backup": false,
+      "enabled": true,
+      "verify_ssl": true
+    },
+    {
+      "id": "backup-1",
+      "host": "fallback.example.com",
+      "port": 80,
+      "weight": 10,
+      "protocol": "http",
+      "backup": true,
+      "enabled": true
+    }
+  ],
+
+  "load_balancer": {
+    "algorithm": "round_robin",
+    "retries": 2,
+    "health_check": {
+      "enabled": true,
+      "type": "http",
+      "path": "/health",
+      "interval": 10,
+      "timeout": 5,
+      "healthy_threshold": 2,
+      "unhealthy_threshold": 3
+    }
+  },
+
+  "protocol": {
+    "force_https": {
+      "enable": true,
+      "redirect_code": 301,
+      "https_port": null,
+      "exclude_paths": ["/health", "/.well-known/"]
+    },
+    "http2": true,
+    "websocket": { "enable": true },
+    "sse": { "enable": false },
+    "grpc": { "enabled": false }
+  },
+
+  "ssl": {
+    "enabled": true,
+    "type": "acme",
+    "acme_email": "admin@example.com"
+  },
+
+  "cache": {
+    "enabled": true,
+    "default_ttl": 3600,
+    "max_size": 104857600,
+    "sort_query_string": true,
+    "vary_headers": [],
+    "cache_authorized": false,
+    "cache_cookies": false,
+    "rules": [
+      { "type": "extension", "match": ["js", "css", "png", "jpg", "webp", "woff2", "svg"], "ttl": 86400 },
+      { "type": "path", "match": "/api", "ttl": 0 },
+      { "type": "path", "match": "/static", "ttl": 604800 }
+    ]
+  },
+
+  "waf": {
+    "enabled": true,
+    "mode": "block",
+    "rules": {
+      "ip_whitelist": ["203.0.113.0/24"],
+      "ip_blacklist": ["198.51.100.0/24"],
+      "asn_blacklist": [],
+      "country_whitelist": ["US", "JP", "CN", "DE", "GB", "KR", "SG"],
+      "country_blacklist": [],
+      "region_blacklist": {},
+      "continent_blacklist": []
+    }
+  },
+
+  "cc": {
+    "enabled": true,
+    "default_rate": 100,
+    "default_window": 60,
+    "default_block_duration": 600,
+    "default_action": "block",
+    "rules": [
+      { "path": "/api/login", "rate": 5, "window": 60, "block_duration": 1800, "action": "challenge", "key_type": "ip" },
+      { "path": "/api/register", "rate": 3, "window": 300, "block_duration": 3600, "action": "block", "key_type": "ip" }
+    ]
+  },
+
+  "headers": {
+    "request": [
+      { "action": "set", "name": "X-Forwarded-Proto", "value": "https" },
+      { "action": "add", "name": "X-Request-Source", "value": "nozdormu" }
+    ],
+    "response": [
+      { "action": "set", "name": "X-Frame-Options", "value": "DENY" },
+      { "action": "set", "name": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+      { "action": "set", "name": "X-Content-Type-Options", "value": "nosniff" },
+      { "action": "set", "name": "X-Client-IP", "value": "${client_ip}" },
+      { "action": "remove", "name": "X-Powered-By" }
+    ]
+  },
+
+  "domain_redirect": null,
+  "url_redirect_rules": [],
+
+  "timeouts": {
+    "connect": 5,
+    "send": 30,
+    "read": 30
+  },
+
+  "compression": {
+    "enabled": true,
+    "algorithms": ["zstd", "brotli", "gzip"],
+    "level": 6,
+    "min_size": 256,
+    "compressible_types": [
+      "text/*",
+      "application/json",
+      "application/javascript",
+      "application/xml",
+      "image/svg+xml"
+    ]
+  }
+}

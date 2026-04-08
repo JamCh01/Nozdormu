@@ -1,0 +1,17 @@
+{
+  "_doc": "最小化站点配置 — 仅反向代理，所有功能关闭",
+
+  "site_id": "basic",
+  "enabled": true,
+  "port": 80,
+  "domains": ["example.com"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "backend.example.com",
+      "port": 80,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ]
+}

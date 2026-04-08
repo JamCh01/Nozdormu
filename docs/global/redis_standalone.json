@@ -1,0 +1,15 @@
+{
+  "_doc": "etcd key: {prefix}/global/redis — 单机模式，适合开发/测试",
+
+  "mode": "standalone",
+  "password": null,
+  "db": 0,
+  "standalone": {
+    "host": "127.0.0.1",
+    "port": 6379
+  },
+  "connect_timeout_ms": 3000,
+  "send_timeout_ms": 3000,
+  "read_timeout_ms": 3000,
+  "pool_size": 50
+}

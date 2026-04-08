@@ -1,0 +1,50 @@
+{
+  "_doc": "WAF 配置详解 — IP/GeoIP/ASN 多维度访问控制",
+
+  "site_id": "waf-full",
+  "enabled": true,
+  "port": 80,
+  "domains": ["secure.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "waf": {
+    "enabled": true,
+
+    "_mode": "block = 命中规则直接返回 403 | log = 仅记录不拦截（用于观察期）",
+    "mode": "block",
+
+    "rules": {
+      "_ip_whitelist": "白名单 CIDR，命中后跳过所有 WAF 检查（包括 GeoIP）",
+      "ip_whitelist": [
+        "1.1.1.0/24",
+        "203.0.113.0/24"
+      ],
+
+      "_ip_blacklist": "黑名单 CIDR，直接拦截",
+      "ip_blacklist": [
+        "198.51.100.0/24",
+        "192.0.2.0/24"
+      ],
+
+      "_asn_blacklist": "按 ASN 编号拦截（需要 GeoIP ASN 数据库）",
+      "asn_blacklist": [64496, 64497],
+
+      "_country_whitelist": "国家白名单（ISO 3166-1 alpha-2），设置后仅允许列表中的国家访问（fail-closed）",
+      "_country_whitelist_note": "如果 IP 无 GeoIP 数据，会被拦截（fail-closed 策略）",
+      "country_whitelist": ["US", "JP", "CN", "DE", "GB", "KR", "SG"],
+
+      "_country_blacklist": "国家黑名单，与 country_whitelist 互斥，二选一使用",
+      "country_blacklist": [],
+
+      "_region_blacklist": "按国家内的地区拦截，key 为国家代码，value 为地区名列表",
+      "region_blacklist": {
+        "CN": ["Tibet", "Xinjiang"]
+      },
+
+      "_continent_blacklist": "按大洲拦截: AF(非洲) AN(南极) AS(亚洲) EU(欧洲) NA(北美) OC(大洋洲) SA(南美)",
+      "continent_blacklist": ["AN"]
+    }
+  }
+}
