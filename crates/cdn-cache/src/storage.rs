@@ -196,6 +196,78 @@ impl CacheStorage {
 
         Ok(())
     }
+
+    /// Delete multiple cache entries by their cache keys.
+    /// Used for site-wide purge after discovering keys via Redis SCAN.
+    /// Returns the count of successfully deleted entries.
+    pub async fn delete_many(
+        &self,
+        site_id: &str,
+        cache_keys: &[String],
+    ) -> Result<u32, String> {
+        if cache_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let mut deleted = 0u32;
+
+        // Delete from OSS in batch
+        if let Some(ref oss) = self.oss {
+            let object_paths: Vec<String> = cache_keys
+                .iter()
+                .map(|k| cache_object_path(site_id, k))
+                .collect();
+            match oss.delete_objects_batch(&object_paths).await {
+                Ok(count) => deleted = count,
+                Err(e) => {
+                    log::error!("[Cache] batch OSS delete failed for site {}: {}", site_id, e);
+                    return Err(format!("OSS batch delete error: {}", e));
+                }
+            }
+        }
+
+        // Delete Redis meta keys
+        if let Some(ref redis) = self.redis {
+            for key in cache_keys {
+                let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, key);
+                if let Err(e) = redis.del(&redis_key).await {
+                    log::warn!("[Cache] Redis DEL failed: {} - {}", redis_key, e);
+                }
+            }
+        }
+
+        Ok(deleted)
+    }
+
+    /// Delete all cache entries for a site by listing OSS objects.
+    /// Fallback path when Redis is unavailable for SCAN.
+    /// Returns the count of deleted objects.
+    pub async fn delete_site_oss_only(
+        &self,
+        site_id: &str,
+    ) -> Result<u32, String> {
+        let oss = self.oss.as_ref().ok_or("OSS not configured")?;
+        let prefix = format!("cache/{}/", site_id);
+
+        let keys = oss.list_objects(&prefix, 1_000_000)
+            .await
+            .map_err(|e| format!("OSS list error: {}", e))?;
+
+        if keys.is_empty() {
+            return Ok(0);
+        }
+
+        log::info!(
+            "[Cache] purge site {} via OSS listing: {} objects found",
+            site_id, keys.len()
+        );
+
+        let deleted = oss.delete_objects_batch(&keys)
+            .await
+            .map_err(|e| format!("OSS batch delete error: {}", e))?;
+
+        Ok(deleted)
+    }
 }
 
 /// Build CacheMeta from response status and headers.

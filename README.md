@@ -7,15 +7,15 @@ High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudfl
 - **Dynamic Configuration** -- Site configs and cluster-shared settings stored in etcd, hot-reloaded via ArcSwap with zero downtime; bootstrap params via CLI flags, env vars override etcd for per-node control
 - **WAF** -- IP/CIDR whitelist/blacklist (prefix trie O(log n)), GeoIP country/region/ASN filtering, fail-closed country whitelist
 - **Rate Limiting (CC)** -- Hybrid local+Redis counters, JS challenge (HMAC-SHA256), per-path rules with longest-prefix matching
-- **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance
+- **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance, cache purge API (exact URL + site-wide)
 - **Multi-Protocol** -- HTTP, WebSocket, SSE, gRPC (native + gRPC-Web) with per-protocol timeout and header handling
-- **Load Balancing** -- Weighted round-robin, IP hash, random; passive health checks with automatic failover to backup origins
+- **Load Balancing** -- Weighted round-robin, IP hash, random; active health checks (HTTP/TCP probes) + passive health tracking with automatic failover to backup origins
 - **SSL/TLS** -- Multi-provider ACME (Let's Encrypt, ZeroSSL, Buypass, Google), automatic renewal, distributed locking
 - **Redirects** -- Three-tier engine: domain redirect, protocol enforcement (HTTP/HTTPS), URL rules (exact/prefix/regex/domain)
 - **Header Manipulation** -- Request/response header rules with variable substitution (`${client_ip}`, `${host}`, `${cache_status}`, etc.)
-- **Observability** -- Prometheus metrics, Redis Streams request logging, per-request ID tracking
+- **Observability** -- Prometheus metrics (request/upstream/health check/cache purge counters, duration histograms), Redis Streams request logging, per-request ID tracking
 - **Compression** -- gzip, Brotli, Zstandard with `Accept-Encoding` negotiation; per-site config with global default; auto-skip for WebSocket/SSE/gRPC and non-compressible types
-- **Admin API** -- Config reload, health status, CC state inspection; Bearer token auth with constant-time comparison
+- **Admin API** -- Config reload, health status and manual override, CC state inspection, cache purge (exact URL + site-wide with background tasks); Bearer token auth with constant-time comparison
 
 ## Architecture
 
@@ -23,9 +23,9 @@ High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudfl
 crates/
   cdn-common        Shared types, error handling, RedisOps trait
   cdn-config        Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
-  cdn-cache         Cache strategy, key generation, S3/OSS client (AWS Sig v4)
+  cdn-cache         Cache strategy, key generation, S3/OSS client (AWS Sig v4), bulk purge
   cdn-middleware     WAF engine, CC engine, redirect engine, header rules
-  cdn-proxy          Main binary: Pingora proxy, balancer, DNS, SSL, admin API
+  cdn-proxy          Main binary: Pingora proxy, balancer, DNS, SSL, active health probes, admin API
 ```
 
 ### Request Flow
@@ -45,6 +45,16 @@ Client -> Pingora Listener
   -> Response filter (header rules, cache write, security headers)
   -> Logging (Prometheus metrics, Redis Streams, passive health update)
 ```
+
+### Active Health Checks
+
+Origins are probed independently of real traffic via a background supervisor service:
+
+- **HTTP probe**: GET to configurable path, validate status code (default 200-299)
+- **TCP probe**: Connection-only check with timeout
+- **Per-site config**: type, path, interval, timeout, thresholds, expected status codes, Host header override
+- **Supervisor loop**: Reconciles running probe tasks against live config every 5s; spawns/aborts tasks as sites/origins change
+- **Coexistence**: Active probes use per-site thresholds; passive checks use global thresholds; both write to the same health state
 
 ## Requirements
 
@@ -93,6 +103,16 @@ curl http://localhost:6190/metrics
 
 # Admin API (localhost only)
 curl http://localhost:8080/upstream/health
+
+# Cache purge (exact URL)
+curl -X POST http://localhost:8080/cache/purge \
+  -H "Content-Type: application/json" \
+  -d '{"type":"url","site_id":"example","host":"example.com","path":"/logo.png"}'
+
+# Cache purge (entire site, async)
+curl -X POST http://localhost:8080/cache/purge \
+  -H "Content-Type: application/json" \
+  -d '{"type":"site","site_id":"example"}'
 ```
 
 ## Configuration
@@ -163,7 +183,16 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
   ],
   "load_balancer": {
     "algorithm": "round_robin",
-    "retries": 2
+    "retries": 2,
+    "health_check": {
+      "enabled": true,
+      "type": "http",
+      "path": "/health",
+      "interval": 10,
+      "timeout": 5,
+      "healthy_threshold": 2,
+      "unhealthy_threshold": 3
+    }
   },
   "cache": {
     "enabled": true,
@@ -223,7 +252,7 @@ See [`docs/global/`](docs/global/) for all global config examples and [`docs/sit
 ## Development
 
 ```bash
-# Run unit/integration tests (243 tests)
+# Run unit/integration tests (273 tests)
 cargo test
 
 # Lint

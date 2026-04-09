@@ -1,15 +1,22 @@
 use crate::balancer::DynamicBalancer;
 use crate::ssl::challenge::ChallengeStore;
+use crate::admin::purge::{
+    PurgeRequest, PurgeTaskTracker, PurgeTaskStatus, PurgeTaskState,
+    purge_url, purge_site_background, validate_site_id, validate_purge_url,
+};
+use crate::utils::redis_pool::RedisPool;
 use arc_swap::ArcSwap;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
+use cdn_cache::storage::CacheStorage;
 use cdn_config::{EtcdConfigManager, LiveConfig};
 use cdn_middleware::cc::CcEngine;
 use serde_json::{json, Value};
+use serde::Deserialize;
 use std::sync::Arc;
 
 /// Shared state for admin API handlers.
@@ -22,6 +29,9 @@ pub struct AdminState {
     /// Optional Bearer token for admin API authentication.
     /// If None, no authentication is required (localhost-only trust).
     pub admin_token: Option<String>,
+    pub cache_storage: Arc<CacheStorage>,
+    pub redis_pool: Arc<RedisPool>,
+    pub purge_tracker: Arc<PurgeTaskTracker>,
 }
 
 /// Bearer token authentication middleware.
@@ -65,7 +75,11 @@ pub fn admin_router(state: Arc<AdminState>) -> Router {
         .route("/ssl/clear-cache", post(clear_ssl_cache))
         .route("/site/:id", get(get_site_config))
         .route("/upstream/health", get(get_upstream_health))
+        .route("/upstream/health/:site_id/:origin_id", put(set_upstream_health))
         .route("/cc/blocked", get(get_cc_blocked))
+        .route("/cache/purge", post(purge_cache))
+        .route("/cache/purge/status/:task_id", get(purge_status))
+        .route("/cache/purge/status", get(purge_list_tasks))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
 }
@@ -126,7 +140,7 @@ async fn get_site_config(
     })))
 }
 
-/// GET /upstream/health — Get upstream health status.
+/// GET /upstream/health — Get upstream health status with details.
 async fn get_upstream_health(
     State(state): State<Arc<AdminState>>,
 ) -> Json<Value> {
@@ -135,20 +149,53 @@ async fn get_upstream_health(
 
     for (site_id, site) in &config.sites {
         for origin in &site.origins {
-            let healthy = state.balancer.health.is_healthy(site_id, &origin.id);
+            let detail = state.balancer.health.get_detail(site_id, &origin.id);
+            let last_check_ts = detail.last_active_check.map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            });
             health_data.push(json!({
                 "site_id": site_id,
                 "origin_id": origin.id,
                 "host": origin.host,
                 "port": origin.port,
-                "healthy": healthy,
+                "healthy": detail.healthy,
                 "backup": origin.backup,
                 "enabled": origin.enabled,
+                "consecutive_successes": detail.consecutive_successes,
+                "consecutive_failures": detail.consecutive_failures,
+                "last_check_time": last_check_ts,
+                "last_check_success": detail.last_active_success,
             }));
         }
     }
 
     Json(json!({ "origins": health_data }))
+}
+
+#[derive(Deserialize)]
+struct SetHealthBody {
+    healthy: bool,
+}
+
+/// PUT /upstream/health/:site_id/:origin_id — Manually set origin health status.
+async fn set_upstream_health(
+    State(state): State<Arc<AdminState>>,
+    Path((site_id, origin_id)): Path<(String, String)>,
+    Json(body): Json<SetHealthBody>,
+) -> Json<Value> {
+    state.balancer.health.set_status(&site_id, &origin_id, body.healthy);
+    log::info!(
+        "[Admin] health override: site={} origin={} healthy={}",
+        site_id, origin_id, body.healthy
+    );
+    Json(json!({
+        "status": "ok",
+        "site_id": site_id,
+        "origin_id": origin_id,
+        "healthy": body.healthy,
+    }))
 }
 
 /// GET /cc/blocked — Get currently blocked IPs.
@@ -157,6 +204,126 @@ async fn get_cc_blocked(
 ) -> Json<Value> {
     // moka Cache doesn't support iteration; needs blocked_index DashMap for full listing
     Json(json!({ "blocked": [], "note": "blocked IP listing requires blocked_index" }))
+}
+
+/// POST /cache/purge — Purge cache entries.
+async fn purge_cache(
+    State(state): State<Arc<AdminState>>,
+    Json(req): Json<PurgeRequest>,
+) -> (StatusCode, Json<Value>) {
+    match req {
+        PurgeRequest::Url {
+            site_id, host, path, query_string, sort_query_string, vary_headers,
+        } => {
+            // Validate inputs
+            if let Err(e) = validate_site_id(&site_id) {
+                return (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": e})));
+            }
+            if let Err(e) = validate_purge_url(&host, &path) {
+                return (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": e})));
+            }
+
+            // Validate site exists
+            if !state.live_config.load().sites.contains_key(&site_id) {
+                return (StatusCode::NOT_FOUND, Json(json!({
+                    "status": "error", "message": format!("site '{}' not found", site_id)
+                })));
+            }
+
+            log::info!("[Admin] cache purge URL: site={} host={} path={}", site_id, host, path);
+
+            match purge_url(
+                &state.cache_storage,
+                &site_id, &host, &path,
+                query_string.as_deref(),
+                sort_query_string,
+                &vary_headers,
+            ).await {
+                Ok(cache_key) => (StatusCode::OK, Json(json!({
+                    "status": "ok",
+                    "purge_type": "url",
+                    "site_id": site_id,
+                    "cache_key": cache_key,
+                    "keys_deleted": 1,
+                }))),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                    "status": "error",
+                    "message": format!("purge failed: {}", e),
+                }))),
+            }
+        }
+        PurgeRequest::Site { site_id } => {
+            // Validate inputs
+            if let Err(e) = validate_site_id(&site_id) {
+                return (StatusCode::BAD_REQUEST, Json(json!({"status": "error", "message": e})));
+            }
+
+            // Validate site exists
+            if !state.live_config.load().sites.contains_key(&site_id) {
+                return (StatusCode::NOT_FOUND, Json(json!({
+                    "status": "error", "message": format!("site '{}' not found", site_id)
+                })));
+            }
+
+            // Check for active purge on same site
+            if state.purge_tracker.has_active_for_site(&site_id) {
+                return (StatusCode::CONFLICT, Json(json!({
+                    "status": "error",
+                    "message": format!("a purge is already running for site '{}'", site_id),
+                })));
+            }
+
+            let task_id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().timestamp();
+
+            let task_status = PurgeTaskStatus {
+                task_id: task_id.clone(),
+                site_id: site_id.clone(),
+                status: PurgeTaskState::Running,
+                keys_deleted: 0,
+                started_at: now,
+                completed_at: None,
+                error: None,
+            };
+            state.purge_tracker.insert(task_status);
+
+            log::info!("[Admin] cache purge site: site={} task={}", site_id, task_id);
+
+            // Spawn background task
+            let redis_pool = Arc::clone(&state.redis_pool);
+            let cache_storage = Arc::clone(&state.cache_storage);
+            let tracker = Arc::clone(&state.purge_tracker);
+            let tid = task_id.clone();
+            let sid = site_id.clone();
+            tokio::spawn(async move {
+                purge_site_background(redis_pool, cache_storage, sid, tracker, tid).await;
+            });
+
+            (StatusCode::ACCEPTED, Json(json!({
+                "status": "accepted",
+                "purge_type": "site",
+                "site_id": site_id,
+                "task_id": task_id,
+            })))
+        }
+    }
+}
+
+/// GET /cache/purge/status/:task_id — Get purge task status.
+async fn purge_status(
+    State(state): State<Arc<AdminState>>,
+    Path(task_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let task = state.purge_tracker.get(&task_id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::to_value(task).unwrap_or(json!({"status": "error"}))))
+}
+
+/// GET /cache/purge/status — List all purge tasks.
+async fn purge_list_tasks(
+    State(state): State<Arc<AdminState>>,
+) -> Json<Value> {
+    let tasks = state.purge_tracker.list();
+    Json(json!({ "tasks": tasks }))
 }
 
 /// Start the admin API server on 127.0.0.1:8080.

@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 /// Per-origin health state, protected by DashMap's per-shard lock.
 #[derive(Debug, Clone)]
@@ -7,6 +8,10 @@ struct OriginHealth {
     healthy: bool,
     consecutive_failures: u32,
     consecutive_successes: u32,
+    /// Timestamp of last active health check probe.
+    last_active_check: Option<SystemTime>,
+    /// Result of last active health check probe.
+    last_active_success: Option<bool>,
 }
 
 impl Default for OriginHealth {
@@ -15,8 +20,20 @@ impl Default for OriginHealth {
             healthy: true,
             consecutive_failures: 0,
             consecutive_successes: 0,
+            last_active_check: None,
+            last_active_success: None,
         }
     }
+}
+
+/// Detailed health info returned by `get_detail()` for admin API.
+#[derive(Debug, Clone)]
+pub struct HealthDetail {
+    pub healthy: bool,
+    pub consecutive_successes: u32,
+    pub consecutive_failures: u32,
+    pub last_active_check: Option<SystemTime>,
+    pub last_active_success: Option<bool>,
 }
 
 /// Health checker for origin servers.
@@ -107,6 +124,42 @@ impl HealthChecker {
         h.consecutive_failures = 0;
         h.consecutive_successes = 0;
     }
+
+    /// Record active health check probe result metadata.
+    pub fn record_active_check(&self, site_id: &str, origin_id: &str, success: bool) {
+        let key = make_key(site_id, origin_id);
+        let mut entry = self.state.entry(key).or_default();
+        let h = entry.value_mut();
+        h.last_active_check = Some(SystemTime::now());
+        h.last_active_success = Some(success);
+    }
+
+    /// Get detailed health info for admin API.
+    pub fn get_detail(&self, site_id: &str, origin_id: &str) -> HealthDetail {
+        let key = make_key(site_id, origin_id);
+        self.state
+            .get(&key)
+            .map(|h| HealthDetail {
+                healthy: h.healthy,
+                consecutive_successes: h.consecutive_successes,
+                consecutive_failures: h.consecutive_failures,
+                last_active_check: h.last_active_check,
+                last_active_success: h.last_active_success,
+            })
+            .unwrap_or(HealthDetail {
+                healthy: true,
+                consecutive_successes: 0,
+                consecutive_failures: 0,
+                last_active_check: None,
+                last_active_success: None,
+            })
+    }
+
+    /// Remove an origin's health state (cleanup when probe task removed).
+    pub fn remove_origin(&self, site_id: &str, origin_id: &str) {
+        let key = make_key(site_id, origin_id);
+        self.state.remove(&key);
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +230,54 @@ mod tests {
         hc.set_status("site1", "origin1", false);
         assert!(!hc.is_healthy("site1", "origin1"));
         hc.set_status("site1", "origin1", true);
+        assert!(hc.is_healthy("site1", "origin1"));
+    }
+
+    #[test]
+    fn test_get_detail_unknown_origin() {
+        let hc = HealthChecker::new(3, 2);
+        let detail = hc.get_detail("site1", "origin1");
+        assert!(detail.healthy);
+        assert_eq!(detail.consecutive_successes, 0);
+        assert_eq!(detail.consecutive_failures, 0);
+        assert!(detail.last_active_check.is_none());
+        assert!(detail.last_active_success.is_none());
+    }
+
+    #[test]
+    fn test_get_detail_after_failures() {
+        let hc = HealthChecker::new(3, 2);
+        hc.record_failure("site1", "origin1");
+        hc.record_failure("site1", "origin1");
+        let detail = hc.get_detail("site1", "origin1");
+        assert!(detail.healthy); // only 2 failures, threshold is 3
+        assert_eq!(detail.consecutive_failures, 2);
+        assert_eq!(detail.consecutive_successes, 0);
+    }
+
+    #[test]
+    fn test_record_active_check() {
+        let hc = HealthChecker::new(3, 2);
+        hc.record_active_check("site1", "origin1", true);
+        let detail = hc.get_detail("site1", "origin1");
+        assert!(detail.last_active_check.is_some());
+        assert_eq!(detail.last_active_success, Some(true));
+
+        hc.record_active_check("site1", "origin1", false);
+        let detail = hc.get_detail("site1", "origin1");
+        assert_eq!(detail.last_active_success, Some(false));
+    }
+
+    #[test]
+    fn test_remove_origin() {
+        let hc = HealthChecker::new(3, 2);
+        for _ in 0..3 {
+            hc.record_failure("site1", "origin1");
+        }
+        assert!(!hc.is_healthy("site1", "origin1"));
+
+        hc.remove_origin("site1", "origin1");
+        // After removal, unknown origin defaults to healthy
         assert!(hc.is_healthy("site1", "origin1"));
     }
 }

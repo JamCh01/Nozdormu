@@ -18,3 +18,4 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 bytes = { workspace = true }
+quick-xml = { workspace = true }

@@ -93,6 +93,57 @@ pub static RESPONSE_SIZE: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Health Check ──
+
+pub static HEALTH_CHECK_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_health_check_total",
+        "Total active health check probes",
+        &["site_id", "origin_id", "result"]
+    )
+    .unwrap()
+});
+
+pub static HEALTH_CHECK_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_health_check_duration_seconds",
+        "Active health check probe duration",
+        &["site_id", "origin_id"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    )
+    .unwrap()
+});
+
+// ── Cache Purge ──
+
+pub static CACHE_PURGE_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_cache_purge_total",
+        "Total cache purge operations",
+        &["site_id", "purge_type", "result"]
+    )
+    .unwrap()
+});
+
+pub static CACHE_PURGE_KEYS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_cache_purge_keys_total",
+        "Total cache keys purged",
+        &["site_id", "purge_type"]
+    )
+    .unwrap()
+});
+
+pub static CACHE_PURGE_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_cache_purge_duration_seconds",
+        "Cache purge operation duration",
+        &["site_id", "purge_type"],
+        vec![0.001, 0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

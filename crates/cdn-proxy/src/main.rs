@@ -3,13 +3,17 @@
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use arc_swap::ArcSwap;
+use cdn_cache::oss::OssClient;
+use cdn_cache::storage::CacheStorage;
 use cdn_config::{load_cdn_config, BootstrapConfig, LiveConfig, NodeConfig};
 use cdn_middleware::cc::CcEngine;
 use cdn_middleware::waf::WafEngine;
 use cdn_proxy::admin::{admin_router, AdminState};
+use cdn_proxy::admin::purge::PurgeTaskTracker;
 use cdn_proxy::balancer::DynamicBalancer;
 use cdn_proxy::dns::DnsResolver;
 use cdn_proxy::health::HealthChecker;
+use cdn_proxy::health_probe::ActiveHealthCheckService;
 use cdn_proxy::logging::queue::init_log_queue;
 use cdn_proxy::proxy::CdnProxy;
 use cdn_proxy::ssl::challenge::ChallengeStore;
@@ -209,8 +213,37 @@ fn main() {
         node_config.security.cc_default_rate,
         node_config.security.cc_default_window,
         node_config.security.cc_default_block_duration,
-        redis_ops,
+        redis_ops.clone(),
     ));
+
+    // Build OssClient + CacheStorage for cache purge API
+    let oss_client: Option<Arc<OssClient>> = match (
+        &node_config.cache_oss.endpoint,
+        &node_config.cache_oss.bucket,
+        &node_config.cache_oss.access_key_id,
+        &node_config.cache_oss.secret_access_key,
+    ) {
+        (Some(endpoint), Some(bucket), Some(ak), Some(sk))
+            if !endpoint.is_empty() && !bucket.is_empty() =>
+        {
+            log::info!("[Init] OSS: {} / {}", endpoint, bucket);
+            Some(Arc::new(OssClient::new(
+                endpoint,
+                bucket,
+                &node_config.cache_oss.region,
+                ak,
+                sk,
+                node_config.cache_oss.use_ssl,
+                node_config.cache_oss.path_style,
+            )))
+        }
+        _ => {
+            log::info!("[Init] OSS not configured, cache storage disabled");
+            None
+        }
+    };
+    let cache_storage = Arc::new(CacheStorage::new(oss_client, redis_ops));
+    let purge_tracker = Arc::new(PurgeTaskTracker::new());
 
     let health_checker = Arc::new(HealthChecker::new(
         node_config.balancer.unhealthy_threshold,
@@ -218,8 +251,8 @@ fn main() {
     ));
     let dns_resolver = Arc::new(DnsResolver::new());
     let dynamic_balancer = Arc::new(DynamicBalancer::new(
-        health_checker,
-        dns_resolver,
+        Arc::clone(&health_checker),
+        Arc::clone(&dns_resolver),
     ));
 
     let challenge_store = Arc::new(ChallengeStore::new());
@@ -232,7 +265,24 @@ fn main() {
         challenge_store: Arc::clone(&challenge_store),
         etcd_manager: Arc::clone(&etcd_manager),
         admin_token: node_config.security.admin_token.clone(),
+        cache_storage: Arc::clone(&cache_storage),
+        redis_pool: Arc::clone(&redis_pool),
+        purge_tracker: Arc::clone(&purge_tracker),
     });
+
+    // Active health check probes (clone refs before CdnProxy takes ownership)
+    let health_probe_bg = {
+        let service = ActiveHealthCheckService::new(
+            Arc::clone(&live_config),
+            health_checker,
+            dns_resolver,
+            node_config.balancer.health_check_interval,
+            node_config.balancer.health_check_timeout,
+            node_config.balancer.healthy_threshold,
+            node_config.balancer.unhealthy_threshold,
+        );
+        background_service("active health check", service)
+    };
 
     let cdn_proxy = CdnProxy {
         lb,
@@ -277,6 +327,7 @@ fn main() {
     server.add_service(prometheus_service);
     server.add_service(admin_bg);
     server.add_service(etcd_bg);
+    server.add_service(health_probe_bg);
 
     log::info!("Nozdormu CDN starting...");
     server.run_forever();

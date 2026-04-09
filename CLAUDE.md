@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (243 unit/integration tests across 4 crates)
+# Run all tests (273 unit/integration tests across 4 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -41,9 +41,9 @@ bash tests/e2e/teardown.sh    # Stop everything
 crates/
   cdn-common/       Shared types (SiteConfig, CdnError, RedisOps trait)
   cdn-config/       Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
-  cdn-cache/        Cache strategy, key generation, OSS/S3 storage
+  cdn-cache/        Cache strategy, key generation, OSS/S3 storage, bulk purge (ListObjectsV2 + Multi-Object Delete)
   cdn-middleware/    WAF, CC rate limiting, redirects, header manipulation
-  cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, admin API
+  cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, active health probes, admin API
 ```
 
 Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-middleware` ← `cdn-proxy`
@@ -61,7 +61,9 @@ Detailed JSON examples with inline documentation for every config option:
 - **Hybrid config loading**: Cluster-shared config (Redis, security, balancer, timeouts, cache, SSL, logging) loaded from etcd `{prefix}/global/*` at startup, with env vars as override. Priority: **env > etcd > default**. Bootstrap params (node identity, etcd address, paths, log level, secrets) are CLI-only.
 - **Per-request context**: `ProxyCtx` carries all state through Pingora's `request_filter` → `upstream_peer` → `response_filter` → `logging` callbacks.
 - **Hybrid CC counting**: Local moka cache (zero-latency) + async Redis sync every 10 increments. Redis counters use Lua INCRBY+EXPIRE for atomic TTL.
-- **Passive health checks**: Tracked in `logging()` callback via DashMap. No separate probe goroutines yet.
+- **Passive health checks**: Tracked in `logging()` callback via DashMap. 5xx or connection failure = failure, else success. Thresholds from global `BalancerConfig`.
+- **Active health checks**: `ActiveHealthCheckService` (Pingora `BackgroundService`) runs a supervisor loop that reconciles per-origin probe tasks against `LiveConfig` every 5s. Each probe task runs HTTP GET or TCP connect at configurable intervals with initial jitter. Uses per-site thresholds and calls `HealthChecker::set_status()` on threshold crossing. Active and passive coexist — both write to the same `HealthChecker` DashMap; last write wins.
+- **Cache purge**: Admin API supports exact URL purge (synchronous, regenerates cache key from request components) and site-wide purge (async background task). Site purge uses Redis SCAN (cursor-based, non-blocking) to discover cache keys, then S3 Multi-Object Delete for bulk body removal. Falls back to S3 ListObjectsV2 when Redis is unavailable. `PurgeTaskTracker` (DashMap) tracks background task progress with auto-eviction.
 - **Thread-local caches**: Regex patterns (LRU, cap 256), WAF IP sets (keyed by version counter to avoid ABA).
 - **Response compression**: gzip/Brotli/Zstd via `response_body_filter` streaming. Negotiated per-request from `Accept-Encoding`. Two-tier config: per-site override + global default. Skipped for WebSocket/SSE/gRPC and non-compressible MIME types.
 
@@ -122,6 +124,8 @@ Critical production requirements:
 - Tests that need async: `#[tokio::test]`
 - WAF/CC tests use `WafEngine::without_geoip()` and in-memory state (no Redis needed)
 - Cache tests use `CacheConfig::default()` with rule overrides
+- Health probe tests use `HealthChecker` directly with `ProbeState` threshold logic (no network needed)
+- Purge tests use `PurgeTaskTracker` directly and serde deserialization (no Redis/OSS needed)
 
 ### E2E Tests
 

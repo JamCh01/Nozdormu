@@ -136,6 +136,12 @@ pub struct HealthCheckSiteConfig {
     pub healthy_threshold: u32,
     #[serde(default = "default_unhealthy_threshold")]
     pub unhealthy_threshold: u32,
+    /// Acceptable HTTP status codes. None = accept 200-299.
+    #[serde(default)]
+    pub expected_codes: Option<Vec<u16>>,
+    /// Override Host header sent in HTTP health check probes.
+    #[serde(default)]
+    pub host_header: Option<String>,
 }
 
 impl Default for HealthCheckSiteConfig {
@@ -148,6 +154,8 @@ impl Default for HealthCheckSiteConfig {
             timeout: default_health_timeout(),
             healthy_threshold: default_healthy_threshold(),
             unhealthy_threshold: default_unhealthy_threshold(),
+            expected_codes: None,
+            host_header: None,
         }
     }
 }

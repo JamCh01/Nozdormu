@@ -4,6 +4,7 @@ pub mod compression;
 pub mod protocol;
 pub mod balancer;
 pub mod health;
+pub mod health_probe;
 pub mod dns;
 pub mod ssl;
 pub mod logging;

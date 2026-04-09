@@ -16,7 +16,7 @@
     "retries": 2,
     "health_check": {
       "enabled": true,
-      "_type": "http | tcp — HTTP 检查会请求 path 并验证 2xx 响应",
+      "_type": "http | tcp — HTTP 检查会请求 path 并验证状态码；TCP 仅检查连接",
       "type": "http",
       "path": "/health",
       "_interval": "检查间隔（秒）",
@@ -26,7 +26,11 @@
       "_healthy_threshold": "连续成功 N 次后标记为健康",
       "healthy_threshold": 2,
       "_unhealthy_threshold": "连续失败 N 次后标记为不健康",
-      "unhealthy_threshold": 3
+      "unhealthy_threshold": 3,
+      "_expected_codes": "可接受的 HTTP 状态码列表，null 表示接受 200-299",
+      "expected_codes": null,
+      "_host_header": "覆盖探针请求的 Host 头，null 使用源站 host",
+      "host_header": null
     }
   }
 }

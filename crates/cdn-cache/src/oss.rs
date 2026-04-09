@@ -170,6 +170,171 @@ impl OssClient {
         }
     }
 
+    /// List all object keys under a given prefix using S3 ListObjectsV2.
+    /// Handles pagination via ContinuationToken. Returns up to `max_keys` total.
+    pub async fn list_objects(&self, prefix: &str, max_keys: u32) -> Result<Vec<String>, OssError> {
+        let mut all_keys = Vec::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let remaining = max_keys.saturating_sub(all_keys.len() as u32);
+            if remaining == 0 {
+                break;
+            }
+            let batch_size = remaining.min(1000); // S3 max per request
+
+            let mut query_parts = vec![
+                format!("list-type=2"),
+                format!("prefix={}", uri_encode_component(prefix)),
+                format!("max-keys={}", batch_size),
+            ];
+            if let Some(ref token) = continuation_token {
+                query_parts.push(format!("continuation-token={}", uri_encode_component(token)));
+            }
+            query_parts.sort(); // canonical query must be sorted
+            let canonical_query = query_parts.join("&");
+
+            let now = Utc::now();
+            let date_str = now.format("%Y%m%dT%H%M%SZ").to_string();
+            let date_short = now.format("%Y%m%d").to_string();
+            let content_hash = sha256_hex(b"");
+            let host = self.host();
+
+            let mut headers = BTreeMap::new();
+            headers.insert("host".to_string(), host.clone());
+            headers.insert("x-amz-date".to_string(), date_str.clone());
+            headers.insert("x-amz-content-sha256".to_string(), content_hash.clone());
+
+            let canonical_uri = if self.path_style {
+                format!("/{}/", self.bucket)
+            } else {
+                "/".to_string()
+            };
+
+            let authorization = self.sign_v4(
+                "GET", &canonical_uri, &canonical_query, &headers,
+                &content_hash, &date_str, &date_short,
+            );
+
+            let scheme = if self.use_ssl { "https" } else { "http" };
+            let endpoint = self.endpoint.trim_end_matches('/');
+            let host_part = endpoint
+                .strip_prefix("https://")
+                .or_else(|| endpoint.strip_prefix("http://"))
+                .unwrap_or(endpoint);
+            let url = if self.path_style {
+                format!("{}://{}/{}/?{}", scheme, host_part, self.bucket, canonical_query)
+            } else {
+                format!("{}://{}.{}/?{}", scheme, self.bucket, host_part, canonical_query)
+            };
+
+            let resp = self.http_client
+                .get(&url)
+                .header("Host", &host)
+                .header("X-Amz-Date", &date_str)
+                .header("X-Amz-Content-Sha256", &content_hash)
+                .header("Authorization", &authorization)
+                .send()
+                .await
+                .map_err(|e| OssError::Network(e.to_string()))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(OssError::Api(status, body));
+            }
+
+            let body = resp.text().await.map_err(|e| OssError::Network(e.to_string()))?;
+            let (keys, next_token) = parse_list_objects_v2(&body)?;
+            all_keys.extend(keys);
+
+            match next_token {
+                Some(token) if !token.is_empty() => continuation_token = Some(token),
+                _ => break,
+            }
+        }
+
+        Ok(all_keys)
+    }
+
+    /// Delete multiple objects using S3 Multi-Object Delete.
+    /// Batches into groups of 1000 (S3 limit per request).
+    /// Returns the total count of successfully deleted objects.
+    pub async fn delete_objects_batch(&self, keys: &[String]) -> Result<u32, OssError> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+
+        let mut total_deleted = 0u32;
+
+        for chunk in keys.chunks(1000) {
+            let xml_body = build_delete_xml(chunk);
+            let body_bytes = xml_body.into_bytes();
+
+            let now = Utc::now();
+            let date_str = now.format("%Y%m%dT%H%M%SZ").to_string();
+            let date_short = now.format("%Y%m%d").to_string();
+            let content_hash = sha256_hex(&body_bytes);
+            let host = self.host();
+
+            let canonical_query = "delete=";
+
+            let mut headers = BTreeMap::new();
+            headers.insert("content-type".to_string(), "application/xml".to_string());
+            headers.insert("content-length".to_string(), body_bytes.len().to_string());
+            headers.insert("host".to_string(), host.clone());
+            headers.insert("x-amz-date".to_string(), date_str.clone());
+            headers.insert("x-amz-content-sha256".to_string(), content_hash.clone());
+
+            let canonical_uri = if self.path_style {
+                format!("/{}/", self.bucket)
+            } else {
+                "/".to_string()
+            };
+
+            let authorization = self.sign_v4(
+                "POST", &canonical_uri, canonical_query, &headers,
+                &content_hash, &date_str, &date_short,
+            );
+
+            let scheme = if self.use_ssl { "https" } else { "http" };
+            let endpoint = self.endpoint.trim_end_matches('/');
+            let host_part = endpoint
+                .strip_prefix("https://")
+                .or_else(|| endpoint.strip_prefix("http://"))
+                .unwrap_or(endpoint);
+            let url = if self.path_style {
+                format!("{}://{}/{}/?delete=", scheme, host_part, self.bucket)
+            } else {
+                format!("{}://{}.{}/?delete=", scheme, self.bucket, host_part)
+            };
+
+            let resp = self.http_client
+                .post(&url)
+                .header("Host", &host)
+                .header("X-Amz-Date", &date_str)
+                .header("X-Amz-Content-Sha256", &content_hash)
+                .header("Content-Type", "application/xml")
+                .header("Authorization", &authorization)
+                .body(body_bytes)
+                .send()
+                .await
+                .map_err(|e| OssError::Network(e.to_string()))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(OssError::Api(status, body));
+            }
+
+            // Count deleted objects from response
+            let body = resp.text().await.map_err(|e| OssError::Network(e.to_string()))?;
+            total_deleted += parse_delete_result_count(&body);
+        }
+
+        Ok(total_deleted)
+    }
+
     // ── AWS Signature V4 ──
 
     fn sign_v4(
@@ -263,6 +428,7 @@ pub enum OssError {
     Network(String),
     Api(u16, String),
     NotFound,
+    Xml(String),
 }
 
 impl std::fmt::Display for OssError {
@@ -271,6 +437,7 @@ impl std::fmt::Display for OssError {
             OssError::Network(e) => write!(f, "OSS network error: {}", e),
             OssError::Api(status, body) => write!(f, "OSS API error {}: {}", status, body),
             OssError::NotFound => write!(f, "OSS object not found"),
+            OssError::Xml(e) => write!(f, "OSS XML parse error: {}", e),
         }
     }
 }
@@ -304,6 +471,120 @@ fn sha256_hex(data: &[u8]) -> String {
     use ring::digest;
     let hash = digest::digest(&digest::SHA256, data);
     cdn_common::hex_encode(hash.as_ref())
+}
+
+/// URI-encode a single component (not a path — encodes `/` too).
+fn uri_encode_component(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                format!("{}", b as char)
+            } else {
+                format!("%{:02X}", b)
+            }
+        })
+        .collect()
+}
+
+/// Parse S3 ListObjectsV2 XML response.
+/// Returns (keys, next_continuation_token).
+fn parse_list_objects_v2(xml: &str) -> Result<(Vec<String>, Option<String>), OssError> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut keys = Vec::new();
+    let mut next_token: Option<String> = None;
+    let mut in_contents = false;
+    let mut in_key = false;
+    let mut in_next_token = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if local == b"Contents" {
+                    in_contents = true;
+                } else if in_contents && local == b"Key" {
+                    in_key = true;
+                } else if local == b"NextContinuationToken" {
+                    in_next_token = true;
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let name = e.name();
+                let local = name.as_ref();
+                if local == b"Contents" {
+                    in_contents = false;
+                } else if local == b"Key" {
+                    in_key = false;
+                } else if local == b"NextContinuationToken" {
+                    in_next_token = false;
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_key {
+                    let text = e.unescape()
+                        .map_err(|err| OssError::Xml(format!("XML unescape error: {}", err)))?;
+                    keys.push(text.to_string());
+                } else if in_next_token {
+                    let text = e.unescape()
+                        .map_err(|err| OssError::Xml(format!("XML unescape error: {}", err)))?;
+                    next_token = Some(text.to_string());
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(OssError::Xml(format!("XML parse error: {}", e))),
+            _ => {}
+        }
+    }
+
+    Ok((keys, next_token))
+}
+
+/// Build XML body for S3 Multi-Object Delete request.
+fn build_delete_xml(keys: &[String]) -> String {
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Delete><Quiet>true</Quiet>");
+    for key in keys {
+        xml.push_str("<Object><Key>");
+        // Escape XML special characters in key
+        for ch in key.chars() {
+            match ch {
+                '&' => xml.push_str("&amp;"),
+                '<' => xml.push_str("&lt;"),
+                '>' => xml.push_str("&gt;"),
+                '"' => xml.push_str("&quot;"),
+                '\'' => xml.push_str("&apos;"),
+                _ => xml.push(ch),
+            }
+        }
+        xml.push_str("</Key></Object>");
+    }
+    xml.push_str("</Delete>");
+    xml
+}
+
+/// Parse S3 Multi-Object Delete response and count <Deleted> elements.
+fn parse_delete_result_count(xml: &str) -> u32 {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut count = 0u32;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"Deleted" => {
+                count += 1;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    count
 }
 
 #[cfg(test)]
@@ -356,5 +637,82 @@ mod tests {
     fn test_sha256_hex() {
         let hash = sha256_hex(b"");
         assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    #[test]
+    fn test_parse_list_objects_v2() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Contents><Key>cache/site1/ab/abcdef1234</Key></Contents>
+  <Contents><Key>cache/site1/cd/cdef5678</Key></Contents>
+  <NextContinuationToken>token123</NextContinuationToken>
+</ListBucketResult>"#;
+        let (keys, token) = parse_list_objects_v2(xml).unwrap();
+        assert_eq!(keys, vec!["cache/site1/ab/abcdef1234", "cache/site1/cd/cdef5678"]);
+        assert_eq!(token, Some("token123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_list_objects_v2_no_continuation() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+  <Contents><Key>cache/site1/ab/abc</Key></Contents>
+</ListBucketResult>"#;
+        let (keys, token) = parse_list_objects_v2(xml).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(token.is_none());
+    }
+
+    #[test]
+    fn test_parse_list_objects_v2_empty() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult></ListBucketResult>"#;
+        let (keys, token) = parse_list_objects_v2(xml).unwrap();
+        assert!(keys.is_empty());
+        assert!(token.is_none());
+    }
+
+    #[test]
+    fn test_build_delete_xml() {
+        let keys = vec!["cache/site1/ab/abc".to_string(), "cache/site1/cd/def".to_string()];
+        let xml = build_delete_xml(&keys);
+        assert!(xml.contains("<Quiet>true</Quiet>"));
+        assert!(xml.contains("<Key>cache/site1/ab/abc</Key>"));
+        assert!(xml.contains("<Key>cache/site1/cd/def</Key>"));
+        assert!(xml.starts_with("<?xml"));
+        assert!(xml.ends_with("</Delete>"));
+    }
+
+    #[test]
+    fn test_build_delete_xml_escapes_special_chars() {
+        let keys = vec!["cache/site&1/ab/a<b>c".to_string()];
+        let xml = build_delete_xml(&keys);
+        assert!(xml.contains("site&amp;1"));
+        assert!(xml.contains("a&lt;b&gt;c"));
+    }
+
+    #[test]
+    fn test_parse_delete_result_count() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult>
+  <Deleted><Key>cache/site1/ab/abc</Key></Deleted>
+  <Deleted><Key>cache/site1/cd/def</Key></Deleted>
+  <Error><Key>cache/site1/ef/ghi</Key><Code>AccessDenied</Code></Error>
+</DeleteResult>"#;
+        assert_eq!(parse_delete_result_count(xml), 2);
+    }
+
+    #[test]
+    fn test_parse_delete_result_count_empty() {
+        let xml = r#"<DeleteResult></DeleteResult>"#;
+        assert_eq!(parse_delete_result_count(xml), 0);
+    }
+
+    #[test]
+    fn test_uri_encode_component() {
+        assert_eq!(uri_encode_component("hello"), "hello");
+        assert_eq!(uri_encode_component("a/b"), "a%2Fb");
+        assert_eq!(uri_encode_component("a b"), "a%20b");
+        assert_eq!(uri_encode_component("a=1&b=2"), "a%3D1%26b%3D2");
     }
 }

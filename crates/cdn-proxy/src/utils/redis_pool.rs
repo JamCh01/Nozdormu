@@ -119,6 +119,49 @@ impl RedisPool {
         matches!(result, Ok(Some(_)))
     }
 
+    /// SCAN keys matching a pattern. Returns all matching keys.
+    /// Uses cursor-based iteration (safe for production, non-blocking).
+    /// `count` is a hint for how many keys to return per iteration.
+    /// Safety cap at 1,000,000 keys to prevent OOM.
+    pub async fn scan_keys(&self, pattern: &str, count: usize) -> Result<Vec<String>, String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Err("Redis not available".to_string());
+        };
+
+        const MAX_KEYS: usize = 1_000_000;
+        let mut all_keys = Vec::new();
+        let mut cursor: u64 = 0;
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(count)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| format!("SCAN failed: {}", e))?;
+
+            all_keys.extend(keys);
+
+            if all_keys.len() >= MAX_KEYS {
+                log::warn!(
+                    "[Redis] SCAN hit safety cap ({} keys) for pattern: {}",
+                    MAX_KEYS, pattern
+                );
+                break;
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        Ok(all_keys)
+    }
+
     async fn connect_standalone(config: &NodeConfig) -> Self {
         let url = if let Some(ref pw) = config.redis.password {
             format!(
@@ -323,5 +366,13 @@ mod tests {
         assert_eq!(RedisOps::incr_by(&pool, "key", 1).await.unwrap(), 0);
         assert_eq!(RedisOps::incr_by_ex(&pool, "key", 1, 60).await.unwrap(), 0);
         assert!(!pool.set_nx_ex("key", "val", 60).await);
+    }
+
+    #[tokio::test]
+    async fn test_none_pool_scan_returns_error() {
+        let pool = RedisPool::none();
+        let result = pool.scan_keys("nozdormu:cache:meta:*", 100).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Redis not available");
     }
 }
