@@ -43,6 +43,8 @@ pub struct SiteConfig {
     pub image_optimization: ImageOptimizationConfig,
     #[serde(default)]
     pub range: RangeConfig,
+    #[serde(default)]
+    pub streaming: StreamingConfig,
 }
 
 impl SiteConfig {
@@ -821,4 +823,143 @@ impl Default for RangeConfig {
 
 fn default_range_chunk_size() -> u64 {
     4 * 1024 * 1024 // 4 MB
+}
+
+// ============================================================
+// Streaming Configuration (Auth + Dynamic Packaging + Prefetch)
+// ============================================================
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct StreamingConfig {
+    #[serde(default)]
+    pub auth: StreamingAuthConfig,
+    #[serde(default)]
+    pub dynamic_packaging: DynamicPackagingConfig,
+    #[serde(default)]
+    pub prefetch: PrefetchConfig,
+}
+
+impl std::fmt::Debug for StreamingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingConfig")
+            .field("auth", &self.auth)
+            .field("dynamic_packaging", &self.dynamic_packaging)
+            .field("prefetch", &self.prefetch)
+            .finish()
+    }
+}
+
+// --- Edge Auth / URL Signing ---
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StreamingAuthConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub auth_type: AuthType,
+    /// HMAC-SHA256 secret key for URL signing
+    #[serde(default)]
+    pub auth_key: String,
+    /// Token expiry window in seconds (default 1800 = 30 min)
+    #[serde(default = "default_auth_expire")]
+    pub expire_time: u64,
+}
+
+impl Default for StreamingAuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auth_type: AuthType::default(),
+            auth_key: String::new(),
+            expire_time: default_auth_expire(),
+        }
+    }
+}
+
+impl std::fmt::Debug for StreamingAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingAuthConfig")
+            .field("enabled", &self.enabled)
+            .field("auth_type", &self.auth_type)
+            .field("auth_key", &"[REDACTED]")
+            .field("expire_time", &self.expire_time)
+            .finish()
+    }
+}
+
+fn default_auth_expire() -> u64 {
+    1800
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthType {
+    #[default]
+    A,
+    B,
+    C,
+}
+
+// --- Dynamic Packaging (MP4 → HLS) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicPackagingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Target segment duration in seconds
+    #[serde(default = "default_segment_duration")]
+    pub segment_duration: f64,
+    /// Maximum input MP4 file size in bytes (default 2 GB)
+    #[serde(default = "default_max_mp4_size")]
+    pub max_mp4_size: u64,
+}
+
+impl Default for DynamicPackagingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            segment_duration: default_segment_duration(),
+            max_mp4_size: default_max_mp4_size(),
+        }
+    }
+}
+
+fn default_segment_duration() -> f64 {
+    6.0
+}
+
+fn default_max_mp4_size() -> u64 {
+    2 * 1024 * 1024 * 1024 // 2 GB
+}
+
+// --- Smart Prefetching ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefetchConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Number of segments ahead to prefetch
+    #[serde(default = "default_prefetch_count")]
+    pub prefetch_count: u32,
+    /// Maximum concurrent prefetch requests per site
+    #[serde(default = "default_prefetch_concurrency")]
+    pub concurrency_limit: u32,
+}
+
+impl Default for PrefetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            prefetch_count: default_prefetch_count(),
+            concurrency_limit: default_prefetch_concurrency(),
+        }
+    }
+}
+
+fn default_prefetch_count() -> u32 {
+    3
+}
+
+fn default_prefetch_concurrency() -> u32 {
+    4
 }

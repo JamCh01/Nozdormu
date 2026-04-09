@@ -284,6 +284,11 @@ fn main() {
         background_service("active health check", service)
     };
 
+    // Prefetch worker for streaming segment pre-fetching
+    let prefetch_worker = Arc::new(
+        cdn_streaming::prefetch::PrefetchWorker::new(Arc::clone(&cache_storage))
+    );
+
     let cdn_proxy = CdnProxy {
         lb,
         sni,
@@ -297,6 +302,7 @@ fn main() {
         trusted_proxies: node_config.security.trusted_proxies.clone(),
         default_compression: node_config.compression.clone(),
         default_image_optimization: node_config.image_optimization.clone(),
+        prefetch_worker,
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);

@@ -1,0 +1,54 @@
+{
+  "_doc": "智能预取配置详解 — HLS/DASH 分片主动预拉取",
+  "_behavior": "启用后: 当 CDN 返回 HLS/DASH 清单文件时，自动解析并异步预取后续分片到缓存，提升后续请求的缓存命中率",
+  "_trigger": "在 response_body_filter 中检测 Content-Type 为 application/vnd.apple.mpegurl 或 application/dash+xml",
+
+  "site_id": "prefetch-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["live.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "origin.example.com", "port": 443, "weight": 10, "protocol": "https" }
+  ],
+
+  "streaming": {
+    "prefetch": {
+      "_enabled": "是否启用智能预取",
+      "enabled": true,
+
+      "_prefetch_count": "每次预取的分片数量（从清单中提取的前 N 个分片 URL）",
+      "_prefetch_count_note": "建议值 3-5，过多会浪费带宽，过少则预取效果有限",
+      "prefetch_count": 3,
+
+      "_concurrency_limit": "每个站点的最大并发预取请求数",
+      "_concurrency_limit_note": "通过 Semaphore 控制，防止预取请求压垮源站",
+      "concurrency_limit": 4
+    }
+  },
+
+  "_supported_formats": {
+    "_hls": "HLS (m3u8): 逐行解析 #EXTINF 后的 URI，支持相对和绝对 URL",
+    "_dash": "DASH (mpd): 解析 <SegmentTemplate> 的 media 属性和 $Number$ 替换，以及 <SegmentURL> 元素"
+  },
+
+  "_prefetch_flow": {
+    "_step1": "客户端请求清单文件（如 index.m3u8）",
+    "_step2": "CDN 从源站获取清单并返回给客户端（正常流程，不阻塞）",
+    "_step3": "同时，CDN 影子复制清单内容（不消耗响应体）",
+    "_step4": "在 end_of_stream 时解析清单，提取分片 URL",
+    "_step5": "通过 tokio::spawn 异步发起预取请求（fire-and-forget）",
+    "_step6": "预取的分片存入缓存（CacheStorage::put）",
+    "_step7": "后续客户端请求这些分片时直接缓存命中"
+  },
+
+  "_deduplication": {
+    "_in_flight": "使用 DashMap 追踪进行中的预取，避免重复请求同一分片",
+    "_cache_check": "预取前先检查缓存，已缓存的分片直接跳过"
+  },
+
+  "_origin_fetch": {
+    "_method": "直接通过 reqwest HTTP 客户端请求源站（不经过代理管道）",
+    "_host_header": "使用原始 Host 头，确保源站正确路由",
+    "_timeout": "连接超时 5s，请求超时 30s"
+  }
+}

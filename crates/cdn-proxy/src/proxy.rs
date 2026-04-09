@@ -59,6 +59,7 @@ pub struct CdnProxy {
     pub trusted_proxies: Vec<ipnet::IpNet>,
     pub default_compression: cdn_common::CompressionConfig,
     pub default_image_optimization: cdn_common::ImageOptimizationConfig,
+    pub prefetch_worker: Arc<cdn_streaming::prefetch::PrefetchWorker>,
 }
 
 #[async_trait]
@@ -259,6 +260,36 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── 7.5. Edge Auth / URL Signing ──
+        if let Some(ref site) = ctx.site_config {
+            if site.streaming.auth.enabled {
+                let path = session.req_header().uri.path();
+                let query = session.req_header().uri.query();
+                match cdn_streaming::auth::validate_url(
+                    &site.streaming.auth,
+                    path,
+                    query,
+                ) {
+                    Ok(cleaned_path) => {
+                        ctx.auth_cleaned_path = Some(cleaned_path);
+                        crate::logging::metrics::STREAMING_AUTH_TOTAL
+                            .with_label_values(&[ctx.site_id.as_str(), "accepted"])
+                            .inc();
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[Auth] URL signing validation failed: {}, path={}",
+                            e, path
+                        );
+                        crate::logging::metrics::STREAMING_AUTH_TOTAL
+                            .with_label_values(&[ctx.site_id.as_str(), "rejected"])
+                            .inc();
+                        return self.serve_forbidden(session).await;
+                    }
+                }
+            }
+        }
+
         // ── 8. Redirect check ──
         if let Some(ref site) = ctx.site_config {
             let uri = session.req_header().uri.to_string();
@@ -406,6 +437,45 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── 12. Dynamic packaging detection ──
+        if let Some(ref site) = ctx.site_config {
+            if site.streaming.dynamic_packaging.enabled && ctx.image_params.is_none() {
+                let query = session.req_header().uri.query();
+                let accept = session
+                    .req_header()
+                    .headers
+                    .get("accept")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+
+                let is_hls_query = query.map(|q| q.contains("format=hls")).unwrap_or(false);
+                let is_hls_accept = accept.contains("application/vnd.apple.mpegurl");
+
+                if is_hls_query || is_hls_accept {
+                    // Determine what sub-resource is requested
+                    let segment_param = query.and_then(|q| {
+                        q.split('&').find_map(|p| p.strip_prefix("segment="))
+                    });
+                    ctx.packaging_request = Some(match segment_param {
+                        Some("init") => {
+                            cdn_streaming::packaging::PackagingRequest::InitSegment
+                        }
+                        Some(n) => match n.parse::<u32>() {
+                            Ok(idx) => {
+                                cdn_streaming::packaging::PackagingRequest::MediaSegment(idx)
+                            }
+                            Err(_) => cdn_streaming::packaging::PackagingRequest::Manifest,
+                        },
+                        None => cdn_streaming::packaging::PackagingRequest::Manifest,
+                    });
+
+                    // Packaging wins over Range
+                    ctx.range_request = None;
+                    ctx.range_passthrough = false;
+                }
+            }
+        }
+
         Ok(false) // Continue to upstream_peer
     }
 
@@ -482,6 +552,18 @@ impl ProxyHttp for CdnProxy {
             upstream_request.insert_header("Host", host).ok();
         } else if !self.sni.is_empty() {
             upstream_request.insert_header("Host", &self.sni).ok();
+        }
+
+        // Rewrite upstream path if auth cleaned it (strip auth tokens)
+        if let Some(ref cleaned) = ctx.auth_cleaned_path {
+            let uri_str = if let Some(q) = upstream_request.uri.query() {
+                format!("{}?{}", cleaned, q)
+            } else {
+                cleaned.clone()
+            };
+            if let Ok(uri) = uri_str.parse() {
+                upstream_request.set_uri(uri);
+            }
         }
 
         // Custom request header rules
@@ -643,6 +725,82 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── Dynamic packaging response setup ──
+        if ctx.packaging_request.is_some() && ctx.image_params.is_none() {
+            let content_type = upstream_response
+                .headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            if content_type.contains("video/mp4") || content_type.contains("application/mp4") {
+                // Check size limit
+                let size_ok = upstream_response
+                    .headers
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|len| {
+                        let max = ctx
+                            .site_config
+                            .as_ref()
+                            .map(|s| s.streaming.dynamic_packaging.max_mp4_size)
+                            .unwrap_or(2 * 1024 * 1024 * 1024);
+                        len <= max
+                    })
+                    .unwrap_or(true);
+
+                if size_ok {
+                    ctx.packaging_buffering = true;
+                    match &ctx.packaging_request {
+                        Some(cdn_streaming::packaging::PackagingRequest::Manifest) => {
+                            upstream_response
+                                .insert_header("Content-Type", "application/vnd.apple.mpegurl")
+                                .ok();
+                        }
+                        Some(cdn_streaming::packaging::PackagingRequest::InitSegment)
+                        | Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
+                            upstream_response
+                                .insert_header("Content-Type", "video/mp4")
+                                .ok();
+                        }
+                        None => {}
+                    }
+                    upstream_response.remove_header("Content-Length");
+                } else {
+                    ctx.packaging_request = None;
+                }
+            } else {
+                ctx.packaging_request = None;
+            }
+        }
+
+        // ── Prefetch manifest detection ──
+        if let Some(ref site) = ctx.site_config {
+            if site.streaming.prefetch.enabled
+                && !ctx.packaging_buffering
+                && !ctx.image_buffering
+            {
+                let content_type = upstream_response
+                    .headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+
+                if content_type.contains("application/vnd.apple.mpegurl")
+                    || content_type.contains("audio/mpegurl")
+                {
+                    ctx.prefetch_manifest_type =
+                        Some(crate::context::ManifestType::Hls);
+                    ctx.prefetch_buffering = true;
+                } else if content_type.contains("application/dash+xml") {
+                    ctx.prefetch_manifest_type =
+                        Some(crate::context::ManifestType::Dash);
+                    ctx.prefetch_buffering = true;
+                }
+            }
+        }
+
         // ── Image optimization setup ──
         // Must run BEFORE compression — image path skips compression entirely.
         if ctx.image_params.is_some() && matches!(ctx.protocol_type, ProtocolType::Http) {
@@ -725,7 +883,9 @@ impl ProxyHttp for CdnProxy {
         // Skip for non-HTTP protocols (WebSocket/SSE/gRPC)
         // Skip if image buffering is active (images are already compressed)
         // Skip if Range request is active (byte offsets refer to uncompressed content)
+        // Skip if dynamic packaging is active (video segments should not be compressed)
         if !ctx.image_buffering
+            && !ctx.packaging_buffering
             && ctx.range_request.is_none()
             && matches!(ctx.protocol_type, ProtocolType::Http)
         {
@@ -853,6 +1013,112 @@ impl ProxyHttp for CdnProxy {
                 }
             }
             return Ok(None);
+        }
+
+        // ── Dynamic packaging path ──
+        if ctx.packaging_buffering {
+            if let Some(data) = body.take() {
+                ctx.packaging_buffer.extend_from_slice(&data);
+                *body = Some(Bytes::new());
+            }
+            if end_of_stream {
+                ctx.packaging_buffering = false;
+                let mp4_data = std::mem::take(&mut ctx.packaging_buffer);
+                let segment_duration = ctx
+                    .site_config
+                    .as_ref()
+                    .map(|s| s.streaming.dynamic_packaging.segment_duration)
+                    .unwrap_or(6.0);
+
+                let start = std::time::Instant::now();
+                match cdn_streaming::packaging::process_packaging_request(
+                    &mp4_data,
+                    ctx.packaging_request.as_ref().unwrap(),
+                    segment_duration,
+                    &ctx.uri,
+                    _session.req_header().uri.query(),
+                ) {
+                    Ok(output) => {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let pkg_type = match &ctx.packaging_request {
+                            Some(cdn_streaming::packaging::PackagingRequest::Manifest) => {
+                                "manifest"
+                            }
+                            Some(cdn_streaming::packaging::PackagingRequest::InitSegment) => {
+                                "init"
+                            }
+                            Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
+                                "segment"
+                            }
+                            None => "unknown",
+                        };
+                        crate::logging::metrics::PACKAGING_TOTAL
+                            .with_label_values(&[ctx.site_id.as_str(), "success"])
+                            .inc();
+                        crate::logging::metrics::PACKAGING_DURATION
+                            .with_label_values(&[ctx.site_id.as_str(), pkg_type])
+                            .observe(elapsed);
+                        log::debug!(
+                            "[Packaging] {} generated: {} bytes in {:.3}s",
+                            pkg_type,
+                            output.len(),
+                            elapsed
+                        );
+                        *body = Some(Bytes::from(output));
+                    }
+                    Err(e) => {
+                        log::warn!("[Packaging] transmux failed: {}, passing through", e);
+                        crate::logging::metrics::PACKAGING_TOTAL
+                            .with_label_values(&[ctx.site_id.as_str(), "error"])
+                            .inc();
+                        *body = Some(Bytes::from(mp4_data));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        // ── Prefetch manifest intercept (shadow copy, don't consume body) ──
+        if ctx.prefetch_buffering {
+            if let Some(ref data) = body {
+                ctx.prefetch_body_buffer.extend_from_slice(data);
+            }
+            if end_of_stream {
+                ctx.prefetch_buffering = false;
+                let manifest = std::mem::take(&mut ctx.prefetch_body_buffer);
+                if let Ok(manifest_str) = std::str::from_utf8(&manifest) {
+                    let base_url = format!("{}://{}{}", ctx.scheme, ctx.host, ctx.uri);
+                    let segments = match ctx.prefetch_manifest_type {
+                        Some(crate::context::ManifestType::Hls) => {
+                            cdn_streaming::prefetch::extract_hls_segments(
+                                manifest_str,
+                                &base_url,
+                            )
+                        }
+                        Some(crate::context::ManifestType::Dash) => {
+                            cdn_streaming::prefetch::extract_dash_segments(
+                                manifest_str,
+                                &base_url,
+                            )
+                        }
+                        None => vec![],
+                    };
+                    if !segments.is_empty() {
+                        if let (Some(ref site), Some(ref origin)) =
+                            (&ctx.site_config, &ctx.selected_origin)
+                        {
+                            self.prefetch_worker.prefetch_segments(
+                                ctx.site_id.clone(),
+                                Arc::clone(site),
+                                origin.clone(),
+                                segments,
+                                ctx.host.clone(),
+                            );
+                        }
+                    }
+                }
+                // Body is NOT consumed — passes through to client
+            }
         }
 
         // ── Image optimization path (mutually exclusive with compression) ──
@@ -1043,6 +1309,8 @@ impl ProxyHttp for CdnProxy {
             cc_blocked: ctx.cc_blocked,
             cc_reason: ctx.cc_reason.clone(),
             range_request: ctx.range_request.is_some(),
+            packaging_request: ctx.packaging_request.is_some(),
+            auth_validated: ctx.auth_cleaned_path.is_some(),
             node_id: String::new(), // TODO: inject from NodeConfig
         });
     }

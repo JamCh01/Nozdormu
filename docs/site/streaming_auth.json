@@ -1,0 +1,51 @@
+{
+  "_doc": "边缘鉴权（URL 签名）配置详解 — 防盗链 / 访问控制",
+  "_behavior": "启用后: 在 WAF/CC 之后、缓存查找之前验证 URL 签名。未授权请求直接返回 403，不会触及缓存",
+  "_auth_types": "三种签名模式，与阿里云 CDN 鉴权兼容: Type A（时间戳在前）、Type B（查询参数）、Type C（哈希在前）",
+
+  "site_id": "auth-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["video.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "streaming": {
+    "auth": {
+      "_enabled": "是否启用 URL 签名鉴权",
+      "enabled": true,
+
+      "_auth_type": "签名类型: a / b / c",
+      "_type_a": "URL 格式: /{timestamp}/{md5hash}/{original_path}",
+      "_type_a_note": "HMAC 计算: HMAC-SHA256(key, '{path}-{timestamp}') → hex 前 32 字符",
+      "_type_b": "URL 格式: /path?auth_key={timestamp}-{rand}-{uid}-{md5hash}",
+      "_type_b_note": "HMAC 计算: HMAC-SHA256(key, '{path}-{timestamp}-{rand}-{uid}') → hex 前 32 字符",
+      "_type_c": "URL 格式: /{md5hash}/{timestamp}/{original_path}",
+      "_type_c_note": "与 Type A 相同的 HMAC 公式，但 URL 中哈希和时间戳位置互换",
+      "auth_type": "b",
+
+      "_auth_key": "HMAC-SHA256 密钥（生产环境请使用强随机字符串）",
+      "auth_key": "your-secret-key-here",
+
+      "_expire_time": "签名有效期（秒），默认 1800（30 分钟）",
+      "expire_time": 1800
+    }
+  },
+
+  "_usage_examples": {
+    "_type_a_sign": "签名 URL: /{timestamp}/{hash}/video/test.mp4",
+    "_type_a_curl": "curl http://video.example.com/1712700000/a1b2c3d4e5f6.../video/test.mp4",
+    "_type_b_sign": "签名 URL: /video/test.mp4?auth_key={timestamp}-{rand}-{uid}-{hash}",
+    "_type_b_curl": "curl 'http://video.example.com/video/test.mp4?auth_key=1712700000-abc123-user1-a1b2c3d4...'",
+    "_type_c_sign": "签名 URL: /{hash}/{timestamp}/video/test.mp4",
+    "_type_c_curl": "curl http://video.example.com/a1b2c3d4.../1712700000/video/test.mp4"
+  },
+
+  "_security_notes": {
+    "_constant_time": "签名比较使用常量时间算法，防止时序攻击",
+    "_path_cleaning": "验证通过后，URL 中的鉴权 Token 被剥离，上游收到原始资源路径",
+    "_cache_key": "缓存 Key 基于清理后的路径生成，不同签名的相同资源共享缓存",
+    "_before_cache": "鉴权在缓存查找之前执行，未授权请求永远不会命中缓存"
+  }
+}

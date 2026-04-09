@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (340 unit/integration tests across 5 crates)
+# Run all tests (407 unit/integration tests across 7 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -43,18 +43,19 @@ crates/
   cdn-config/       Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
   cdn-cache/        Cache strategy, key generation, OSS/S3 storage, bulk purge (ListObjectsV2 + Multi-Object Delete)
   cdn-image/        Image optimization: params parsing, Accept negotiation, decode/resize/encode (image + fast_image_resize)
+  cdn-streaming/    Video streaming: URL signing auth (Type A/B/C), MP4→HLS dynamic packaging, HLS/DASH prefetch
   cdn-middleware/    WAF, CC rate limiting, redirects, header manipulation
   cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, active health probes, admin API
 ```
 
-Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-image` / `cdn-middleware` ← `cdn-proxy`
+Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-image` / `cdn-streaming` / `cdn-middleware` ← `cdn-proxy`
 
 ## Configuration Examples
 
 Detailed JSON examples with inline documentation for every config option:
 
 - **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization
-- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, image_optimization, range, ssl, full
+- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, full
 
 ## Architecture Essentials
 
@@ -69,11 +70,15 @@ Detailed JSON examples with inline documentation for every config option:
 - **Response compression**: gzip/Brotli/Zstd via `response_body_filter` streaming. Negotiated per-request from `Accept-Encoding`. Two-tier config: per-site override + global default. Skipped for WebSocket/SSE/gRPC and non-compressible MIME types.
 - **Image optimization**: On-the-fly resize/crop, format conversion (JPEG/PNG/WebP/AVIF), quality adjustment via query params (`?w=200&h=150&fit=cover&fmt=webp&q=80&dpr=2`). Auto-negotiates output format from `Accept` header (AVIF > WebP > original). Full-body buffering in `response_body_filter` (images require complete data before processing). Image path and compression path are mutually exclusive. Uses `image` crate for decode/encode + `fast_image_resize` for SIMD-optimized resize. Graceful degradation: serves original image on processing failure. Cache key correctness is automatic (query params already included in MD5 hash).
 - **Range requests**: Client resume/continuation support (RFC 7233). Parses `Range: bytes=X-Y` headers (single range, suffix, open-ended; multi-range rejected). Pass-through to origin on cache miss; serves byte ranges from cached full bodies on cache hit. Advertises `Accept-Ranges: bytes` on cacheable responses. Supports `If-Range` conditional (strong ETag comparison + HTTP-date). Range is mutually exclusive with both image optimization (image wins) and compression (byte offsets refer to uncompressed content). OSS Range GET (`get_object_range`) avoids loading entire cached files into memory. Per-site `RangeConfig { enabled, chunk_size }` — `chunk_size` reserved for Phase 2 chunked origin-pull.
+- **Video streaming optimization**: Three features in `cdn-streaming` crate:
+  - **Edge Auth (URL Signing)**: Type A (`/{timestamp}/{hash}/{path}`), Type B (`?auth_key={ts}-{rand}-{uid}-{hash}`), Type C (`/{hash}/{timestamp}/{path}`). HMAC-SHA256 with constant-time comparison. Validated in `request_filter` before cache lookup — unauthorized requests never touch cache. Auth tokens stripped from upstream path. Per-site `StreamingAuthConfig { auth_type, auth_key, expire_time }`.
+  - **Dynamic Packaging (MP4→HLS)**: In-house MP4 atom parser (moov/trak/stbl), generates fMP4 init segments + media segments + m3u8 playlists. Triggered by `?format=hls` or `Accept: application/vnd.apple.mpegurl`. Full MP4 buffered in `response_body_filter` (same pattern as image optimization). Each HLS variant (manifest/init/segment N) gets a distinct cache key. Mutually exclusive with image optimization (image wins) and Range (packaging wins). Per-site `DynamicPackagingConfig { segment_duration, max_mp4_size }`.
+  - **Smart Prefetching**: Parses HLS m3u8 and DASH mpd manifests from response bodies, extracts segment URLs, fires background `tokio::spawn` tasks to fetch next N segments from origin via reqwest and store in cache. Shadow-copies manifest body (doesn't consume — client receives at wire speed). Per-site concurrency via `Semaphore`, deduplication via `DashMap`. Per-site `PrefetchConfig { prefetch_count, concurrency_limit }`.
 
 ## Key Patterns
 
 - **Error handling**: `CdnError` (thiserror) in cdn-common, `anyhow` for ad-hoc errors, `pingora::Error` at proxy boundaries. Redis operations degrade gracefully (return None/Ok on failure).
-- **Sensitive data**: `SecurityConfig`, `RedisConfig`, `EtcdConfig`, `EabCredentials` use custom `Debug` impls that redact secrets. Never log these with `{:?}` raw.
+- **Sensitive data**: `SecurityConfig`, `RedisConfig`, `EtcdConfig`, `EabCredentials`, `StreamingAuthConfig` use custom `Debug` impls that redact secrets. Never log these with `{:?}` raw.
 - **Header operations**: `apply_header_op` macro generates both request and response variants. Must use Pingora's `insert_header()` method (not direct `headers.insert()`) to keep `header_name_map` in sync — direct mutation causes a panic in `write_response_header`.
 - **Request IDs**: Lightweight `timestamp-counter` format (no UUID syscall overhead).
 
@@ -131,6 +136,9 @@ Critical production requirements:
 - Purge tests use `PurgeTaskTracker` directly and serde deserialization (no Redis/OSS needed)
 - Image tests use in-memory generated JPEG/PNG test images, verify decode/resize/encode round-trips and dimension correctness
 - Range tests use pure unit tests for parsing, resolution, Content-Range formatting, If-Range validation, and body slicing (no network needed)
+- Streaming auth tests use sign/validate roundtrips with HMAC-SHA256, expiry checks, tampered hash detection, cross-type validation (Type A URL fails Type C)
+- Streaming packaging tests use hand-crafted minimal MP4 byte arrays for parser tests, verify fMP4 box structure (ftyp/moov/moof/mdat), segment sample ranges, and HLS playlist generation
+- Streaming prefetch tests use manifest parsing (HLS m3u8 line-based, DASH mpd XML), URL resolution (relative/absolute), and origin URL construction
 
 ### E2E Tests
 

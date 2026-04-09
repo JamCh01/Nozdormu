@@ -6,6 +6,7 @@ members = [
     "crates/cdn-cache",
     "crates/cdn-middleware",
     "crates/cdn-image",
+    "crates/cdn-streaming",
     "crates/cdn-proxy",
 ]
 
@@ -95,3 +96,4 @@ cdn-config = { path = "crates/cdn-config" }
 cdn-cache = { path = "crates/cdn-cache" }
 cdn-image = { path = "crates/cdn-image" }
 cdn-middleware = { path = "crates/cdn-middleware" }
+cdn-streaming = { path = "crates/cdn-streaming" }

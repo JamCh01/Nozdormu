@@ -75,6 +75,19 @@ pub struct ProxyCtx {
     pub range_served_from_cache: bool,
     pub total_content_length: Option<u64>,
     pub range_body_buffer: Vec<u8>,
+
+    // === Streaming state ===
+    /// Auth: cleaned path after stripping auth tokens
+    pub auth_cleaned_path: Option<String>,
+    /// Dynamic packaging: detected HLS request type
+    pub packaging_request: Option<cdn_streaming::packaging::PackagingRequest>,
+    /// Packaging: buffering MP4 body for transmux
+    pub packaging_buffering: bool,
+    pub packaging_buffer: Vec<u8>,
+    /// Prefetch: manifest type detected, trigger prefetch on end_of_stream
+    pub prefetch_manifest_type: Option<ManifestType>,
+    pub prefetch_body_buffer: Vec<u8>,
+    pub prefetch_buffering: bool,
 }
 
 impl Default for ProxyCtx {
@@ -113,6 +126,13 @@ impl Default for ProxyCtx {
             range_served_from_cache: false,
             total_content_length: None,
             range_body_buffer: Vec::new(),
+            auth_cleaned_path: None,
+            packaging_request: None,
+            packaging_buffering: false,
+            packaging_buffer: Vec::new(),
+            prefetch_manifest_type: None,
+            prefetch_body_buffer: Vec::new(),
+            prefetch_buffering: false,
         }
     }
 }
@@ -168,4 +188,11 @@ pub struct GeoInfo {
     pub asn_org: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+}
+
+/// Manifest type for prefetch detection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ManifestType {
+    Hls,
+    Dash,
 }

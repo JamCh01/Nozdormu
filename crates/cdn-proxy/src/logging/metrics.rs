@@ -186,6 +186,38 @@ pub static RANGE_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Streaming: URL Signing ──
+
+pub static STREAMING_AUTH_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_streaming_auth_total",
+        "Total URL signing validations",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
+// ── Streaming: Dynamic Packaging ──
+
+pub static PACKAGING_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_streaming_packaging_total",
+        "Total dynamic packaging operations",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
+pub static PACKAGING_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_streaming_packaging_duration_seconds",
+        "Dynamic packaging processing duration",
+        &["site_id", "type"],
+        vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

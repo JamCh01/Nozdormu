@@ -18,6 +18,7 @@ cdn-config = { workspace = true }
 cdn-cache = { workspace = true }
 cdn-image = { workspace = true }
 cdn-middleware = { workspace = true }
+cdn-streaming = { workspace = true }
 pingora = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }

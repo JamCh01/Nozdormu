@@ -38,6 +38,8 @@ pub struct LogEntry {
     pub cc_blocked: bool,
     pub cc_reason: Option<String>,
     pub range_request: bool,
+    pub packaging_request: bool,
+    pub auth_validated: bool,
     pub node_id: String,
 }
 

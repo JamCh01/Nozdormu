@@ -164,5 +164,24 @@
   "range": {
     "enabled": true,
     "chunk_size": 4194304
+  },
+
+  "streaming": {
+    "auth": {
+      "enabled": true,
+      "auth_type": "b",
+      "auth_key": "your-hmac-secret-key",
+      "expire_time": 1800
+    },
+    "dynamic_packaging": {
+      "enabled": true,
+      "segment_duration": 6.0,
+      "max_mp4_size": 2147483648
+    },
+    "prefetch": {
+      "enabled": true,
+      "prefetch_count": 3,
+      "concurrency_limit": 4
+    }
   }
 }

@@ -1,0 +1,55 @@
+{
+  "_doc": "动态转封装配置详解 — MP4 实时转 HLS（fMP4 分片）",
+  "_behavior": "启用后: 源站存储 MP4，客户端请求 ?format=hls 时，边缘节点实时解析 MP4 并生成 HLS 播放列表和 fMP4 分片",
+  "_skip_conditions": "以下情况跳过转封装: 图片优化激活时（图片优先）、源站返回非 MP4 Content-Type、文件超过 max_mp4_size",
+
+  "site_id": "packaging-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["vod.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "storage.example.com", "port": 443, "weight": 10, "protocol": "https" }
+  ],
+
+  "streaming": {
+    "dynamic_packaging": {
+      "_enabled": "是否启用动态转封装",
+      "enabled": true,
+
+      "_segment_duration": "目标分片时长（秒），实际时长会对齐到最近的关键帧",
+      "_segment_duration_note": "较短的分片（2-4s）降低延迟，较长的分片（6-10s）提高编码效率",
+      "segment_duration": 6.0,
+
+      "_max_mp4_size": "最大输入 MP4 文件大小（字节），超过则跳过转封装直接透传",
+      "_max_mp4_size_note": "转封装需要将完整 MP4 缓冲到内存，此限制防止内存溢出。默认 2GB",
+      "max_mp4_size": 2147483648
+    }
+  },
+
+  "_request_types": {
+    "_manifest": "请求 m3u8 播放列表: GET /video.mp4?format=hls",
+    "_manifest_accept": "或通过 Accept 头: Accept: application/vnd.apple.mpegurl",
+    "_init_segment": "请求初始化分片: GET /video.mp4?format=hls&segment=init",
+    "_media_segment": "请求媒体分片: GET /video.mp4?format=hls&segment=0",
+    "_media_segment_note": "分片索引从 0 开始，总数 = ceil(视频时长 / segment_duration)"
+  },
+
+  "_hls_output": {
+    "_playlist_format": "#EXTM3U / #EXT-X-VERSION:7 / #EXT-X-PLAYLIST-TYPE:VOD",
+    "_init_segment": "fMP4 初始化分片（ftyp + moov + mvex），包含编解码器配置",
+    "_media_segments": "fMP4 媒体分片（moof + mdat），包含视频/音频采样数据",
+    "_keyframe_alignment": "分片边界自动对齐到视频关键帧（IDR），确保播放器可独立解码每个分片"
+  },
+
+  "_cache_strategy": {
+    "_separate_keys": "每个 HLS 子资源（播放列表/初始化分片/媒体分片）使用独立的缓存 Key",
+    "_key_suffix": "缓存 Key 后缀: |hls|manifest / |hls|init / |hls|seg:{N}",
+    "_first_request": "首次请求触发完整 MP4 解析和转封装，后续请求从缓存返回"
+  },
+
+  "_interaction_matrix": {
+    "_image_optimization": "图片优化优先，转封装被跳过",
+    "_range_requests": "转封装优先，Range 请求被清除",
+    "_compression": "转封装输出跳过压缩（视频数据已压缩）"
+  }
+}

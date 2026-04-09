@@ -1,167 +1,181 @@
 # Nozdormu CDN
 
-High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudflare/pingora), designed as a production replacement for OpenResty/Lua-based CDN systems.
+基于 [Pingora](https://github.com/cloudflare/pingora) 构建的高性能 CDN 反向代理，旨在替代基于 OpenResty/Lua 的 CDN 系统。
 
-## Features
+## 功能特性
 
-- **Dynamic Configuration** -- Site configs and cluster-shared settings stored in etcd, hot-reloaded via ArcSwap with zero downtime; bootstrap params via CLI flags, env vars override etcd for per-node control
-- **WAF** -- IP/CIDR whitelist/blacklist (prefix trie O(log n)), GeoIP country/region/ASN filtering, fail-closed country whitelist
-- **Rate Limiting (CC)** -- Hybrid local+Redis counters, JS challenge (HMAC-SHA256), per-path rules with longest-prefix matching
-- **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance, cache purge API (exact URL + site-wide)
-- **Image Optimization** -- On-the-fly resize/crop (5 fit modes), format conversion (JPEG/PNG/WebP/AVIF), quality adjustment, auto-format negotiation via `Accept` header, DPR-aware adaptive sizing; pure Rust (`image` + `fast_image_resize`)
-- **Range Requests** -- Client resume/continuation (断点续传), `Accept-Ranges: bytes` advertisement, `If-Range` conditional support, Range pass-through to origin, OSS Range GET for memory-efficient cached range serving; per-site enable/disable
-- **Multi-Protocol** -- HTTP, WebSocket, SSE, gRPC (native + gRPC-Web) with per-protocol timeout and header handling
-- **Load Balancing** -- Weighted round-robin, IP hash, random; active health checks (HTTP/TCP probes) + passive health tracking with automatic failover to backup origins
-- **SSL/TLS** -- Multi-provider ACME (Let's Encrypt, ZeroSSL, Buypass, Google), automatic renewal, distributed locking
-- **Redirects** -- Three-tier engine: domain redirect, protocol enforcement (HTTP/HTTPS), URL rules (exact/prefix/regex/domain)
-- **Header Manipulation** -- Request/response header rules with variable substitution (`${client_ip}`, `${host}`, `${cache_status}`, etc.)
-- **Observability** -- Prometheus metrics (request/upstream/health check/cache purge/image optimization counters, duration histograms), Redis Streams request logging, per-request ID tracking
-- **Compression** -- gzip, Brotli, Zstandard with `Accept-Encoding` negotiation; per-site config with global default; auto-skip for WebSocket/SSE/gRPC and non-compressible types
-- **Admin API** -- Config reload, health status and manual override, CC state inspection, cache purge (exact URL + site-wide with background tasks); Bearer token auth with constant-time comparison
+- **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制
+- **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式
+- **CC 防护（频率限制）** -- 本地+Redis 混合计数器，JS 挑战（HMAC-SHA256），按路径规则最长前缀匹配
+- **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除）
+- **图片优化** -- 实时裁剪/缩放（5 种 fit 模式），格式转换（JPEG/PNG/WebP/AVIF），质量调整，通过 `Accept` 头自动协商格式，DPR 自适应；纯 Rust 实现（`image` + `fast_image_resize`）
+- **Range 请求** -- 客户端断点续传，`Accept-Ranges: bytes` 通告，`If-Range` 条件请求，Range 透传回源，OSS Range GET 内存高效的缓存分片服务；按站点启用/禁用
+- **视频流优化** -- 三大功能：
+  - **边缘鉴权（URL 签名）** -- Type A/B/C 三种 URL 签名模式（HMAC-SHA256），防盗链，可配置过期时间
+  - **动态转封装** -- 源站存储 MP4，边缘实时转封装为 HLS（fMP4 分片 + m3u8 播放列表），支持 `?format=hls` 触发
+  - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，提升命中率
+- **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
+- **负载均衡** -- 加权轮询、IP 哈希、随机；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
+- **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），自动续期，分布式锁
+- **重定向** -- 三层引擎：域名重定向、协议强制（HTTP/HTTPS）、URL 规则（精确/前缀/正则/域名）
+- **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
+- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志，请求 ID 追踪
+- **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过
+- **管理 API** -- 配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；Bearer Token 认证，常量时间比较
 
-## Architecture
+## 架构
 
 ```
 crates/
-  cdn-common        Shared types, error handling, RedisOps trait
-  cdn-config        Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
-  cdn-cache         Cache strategy, key generation, S3/OSS client (AWS Sig v4), bulk purge
-  cdn-image         Image optimization: resize/crop, format conversion, quality, Accept negotiation
-  cdn-middleware     WAF engine, CC engine, redirect engine, header rules
-  cdn-proxy          Main binary: Pingora proxy, balancer, DNS, SSL, active health probes, admin API
+  cdn-common        共享类型、错误处理、RedisOps trait
+  cdn-config        节点配置、GlobalConfig（etcd）、LiveConfig（ArcSwap）、etcd 监听
+  cdn-cache         缓存策略、Key 生成、S3/OSS 客户端（AWS Sig v4）、批量清除
+  cdn-image         图片优化：裁剪/缩放、格式转换、质量调整、Accept 协商
+  cdn-streaming     视频流优化：URL 签名鉴权、MP4→HLS 动态转封装、HLS/DASH 智能预取
+  cdn-middleware     WAF 引擎、CC 引擎、重定向引擎、头部规则
+  cdn-proxy          主程序：Pingora 代理、负载均衡、DNS、SSL、主动健康探测、管理 API
 ```
 
-### Request Flow
+### 请求流程
 
 ```
-Client -> Pingora Listener
-  -> Health/ACME/Admin endpoints (short-circuit)
-  -> Site routing (domain -> SiteConfig via exact/wildcard match)
-  -> Client IP extraction (XFF anti-spoofing, configurable trusted proxies)
-  -> WAF check (IP trie -> GeoIP -> ASN -> country -> region)
-  -> CC check (ban cache -> challenge verify -> counter -> threshold)
-  -> Redirect check (domain -> protocol -> URL rules)
-  -> Protocol detection (gRPC > WebSocket > SSE > HTTP)
-  -> Image param parsing (w/h/fit/fmt/q/dpr from query string)
-  -> Range request handling (parse Range header, pass-through or cache serve)
-  -> Cache lookup (key generation -> Redis meta -> OSS body)
-  -> Load balancer (health filter -> algorithm -> DNS resolve -> HttpPeer)
-  -> Upstream request (header injection, protocol-specific headers)
-  -> Response filter (header rules, cache write, security headers)
-  -> Image optimization (detect image type, negotiate format, buffer+process)
-  -> Range response (slice cached body or relay origin 206, skip compression)
-  -> Compression (gzip/Brotli/Zstd, skipped for images and Range responses)
-  -> Logging (Prometheus metrics, Redis Streams, passive health update)
+客户端 -> Pingora 监听器
+  -> 健康检查/ACME/管理端点（短路返回）
+  -> 站点路由（域名 -> SiteConfig，精确/通配符匹配）
+  -> 客户端 IP 提取（XFF 防伪造，可配置信任代理）
+  -> WAF 检查（IP 前缀树 -> GeoIP -> ASN -> 国家 -> 地区）
+  -> CC 检查（封禁缓存 -> 挑战验证 -> 计数器 -> 阈值）
+  -> 边缘鉴权（URL 签名验证 Type A/B/C，剥离 Token 后传递原始路径）
+  -> 重定向检查（域名 -> 协议 -> URL 规则）
+  -> 协议检测（gRPC > WebSocket > SSE > HTTP）
+  -> 图片参数解析（w/h/fit/fmt/q/dpr 查询参数）
+  -> 动态转封装检测（?format=hls 或 Accept 头协商）
+  -> Range 请求处理（解析 Range 头，透传或缓存分片服务）
+  -> 缓存查找（Key 生成 -> Redis 元数据 -> OSS 对象体）
+  -> 负载均衡（健康过滤 -> 算法选择 -> DNS 解析 -> HttpPeer）
+  -> 上游请求（头部注入，协议特定头部）
+  -> 响应过滤（头部规则、缓存写入、安全头部）
+  -> 动态转封装（MP4 解析 -> fMP4 分片生成 / m3u8 播放列表生成）
+  -> 智能预取（解析 HLS/DASH 清单，异步预取后续分片）
+  -> 图片优化（检测图片类型，协商格式，缓冲+处理）
+  -> Range 响应（缓存分片或中继源站 206，跳过压缩）
+  -> 压缩（gzip/Brotli/Zstd，图片和 Range 响应跳过）
+  -> 日志（Prometheus 指标、Redis Streams、被动健康更新）
 ```
 
-### Active Health Checks
+### 主动健康检查
 
-Origins are probed independently of real traffic via a background supervisor service:
+源站通过独立于真实流量的后台服务进行探测：
 
-- **HTTP probe**: GET to configurable path, validate status code (default 200-299)
-- **TCP probe**: Connection-only check with timeout
-- **Per-site config**: type, path, interval, timeout, thresholds, expected status codes, Host header override
-- **Supervisor loop**: Reconciles running probe tasks against live config every 5s; spawns/aborts tasks as sites/origins change
-- **Coexistence**: Active probes use per-site thresholds; passive checks use global thresholds; both write to the same health state
+- **HTTP 探测**：GET 请求到可配置路径，验证状态码（默认 200-299）
+- **TCP 探测**：仅连接检查，带超时
+- **按站点配置**：类型、路径、间隔、超时、阈值、期望状态码、Host 头覆盖
+- **监督循环**：每 5 秒对比运行中的探测任务与实时配置；按需创建/终止任务
+- **共存机制**：主动探测使用站点级阈值；被动检查使用全局阈值；两者写入同一健康状态
 
-## Requirements
+## 环境要求
 
-- Rust 1.84+ (stable)
-- OpenSSL development headers (`libssl-dev` / `openssl-devel`)
-- etcd v3.5+ (configuration store)
-- Redis 7+ with Sentinel (optional, for distributed CC counters and log streaming)
-- MaxMind GeoLite2 databases (optional, for WAF geo-filtering)
+- Rust 1.84+（stable）
+- OpenSSL 开发头文件（`libssl-dev` / `openssl-devel`）
+- etcd v3.5+（配置存储）
+- Redis 7+ with Sentinel（可选，用于分布式 CC 计数器和日志流）
+- MaxMind GeoLite2 数据库（可选，用于 WAF 地理过滤）
 
-## Quick Start
+## 快速开始
 
-### Docker (recommended)
+### Docker（推荐）
 
 ```bash
-# Start everything (CDN + etcd cluster + Redis Sentinel)
+# 启动所有服务（CDN + etcd 集群 + Redis Sentinel）
 docker compose --profile dev up
 
-# Production build
+# 生产构建
 docker compose --profile prod up -d
 ```
 
-### From Source
+### 从源码构建
 
 ```bash
-# Install dependencies (Debian/Ubuntu)
+# 安装依赖（Debian/Ubuntu）
 apt-get install -y libssl-dev pkg-config cmake protobuf-compiler
 
-# Start infrastructure
+# 启动基础设施
 docker compose --profile infra up -d
 
-# Build and run
+# 构建并运行
 cargo build --release
 ./target/release/cdn-proxy -c config/default.yaml \
   --env development --log-level info
 ```
 
-### Verify
+### 验证
 
 ```bash
-# Health check
+# 健康检查
 curl http://localhost:6188/health
 # -> OK
 
-# Prometheus metrics
+# Prometheus 指标
 curl http://localhost:6190/metrics
 
-# Admin API (localhost only)
+# 管理 API（仅限本机）
 curl http://localhost:8080/upstream/health
 
-# Cache purge (exact URL)
+# 缓存清除（精确 URL）
 curl -X POST http://localhost:8080/cache/purge \
   -H "Content-Type: application/json" \
   -d '{"type":"url","site_id":"example","host":"example.com","path":"/logo.png"}'
 
-# Cache purge (entire site, async)
+# 缓存清除（全站，异步）
 curl -X POST http://localhost:8080/cache/purge \
   -H "Content-Type: application/json" \
   -d '{"type":"site","site_id":"example"}'
 
-# Image optimization (resize + auto format negotiation)
+# 图片优化（缩放 + 自动格式协商）
 curl -H "Accept: image/avif,image/webp,*/*" \
   "http://localhost:6188/photo.jpg?w=200&h=150&fit=cover&q=80" -o optimized.avif
 
-# Image optimization (explicit format + DPR)
-curl "http://localhost:6188/photo.jpg?w=400&fmt=webp&q=75&dpr=2" -o optimized.webp
+# 动态转封装（MP4 -> HLS）
+curl "http://localhost:6188/video.mp4?format=hls" -o playlist.m3u8
+curl "http://localhost:6188/video.mp4?format=hls&segment=init" -o init.mp4
+curl "http://localhost:6188/video.mp4?format=hls&segment=0" -o segment0.m4s
+
+# URL 签名鉴权（Type B 示例）
+# 签名 URL: /video.mp4?auth_key={timestamp}-{rand}-{uid}-{hmac_hash}
 ```
 
-## Configuration
+## 配置
 
-Nozdormu uses a three-tier configuration system with priority: **CLI arg > etcd > default**.
+Nozdormu 使用三层配置系统，优先级：**CLI 参数 > etcd > 默认值**。
 
-### Tier 1: Bootstrap (CLI Arguments)
+### 第一层：启动参数（CLI）
 
-These are required before etcd is available and are passed via command-line flags. Run `cdn-proxy --help` for the full list.
+在 etcd 可用之前需要的参数，通过命令行标志传入。运行 `cdn-proxy --help` 查看完整列表。
 
-| Category | CLI Flags |
-|----------|-----------|
-| Node Identity | `--node-id`, `--node-labels`, `--env` |
+| 分类 | CLI 标志 |
+|------|----------|
+| 节点标识 | `--node-id`, `--node-labels`, `--env` |
 | etcd | `--etcd-endpoints`, `--etcd-prefix`, `--etcd-username`, `--etcd-password` |
-| Paths | `--cert-path`, `--geoip-path`, `--log-path` |
-| Log Level | `--log-level` |
+| 路径 | `--cert-path`, `--geoip-path`, `--log-path` |
+| 日志级别 | `--log-level` |
 
-### Tier 2: Cluster-Shared (etcd Global Config)
+### 第二层：集群共享（etcd 全局配置）
 
-Loaded from etcd at startup under `{prefix}/global/*`. Shared across all nodes. Env vars override etcd values for per-node emergency overrides.
+启动时从 etcd `{prefix}/global/*` 加载，所有节点共享。环境变量可覆盖 etcd 值用于单节点紧急覆盖。
 
-| etcd Key | Contents |
-|----------|----------|
-| `{prefix}/global/redis` | Redis mode, sentinels, host, port, timeouts, pool size |
-| `{prefix}/global/security` | WAF mode, CC defaults, trusted proxies, CC challenge secret, admin token |
-| `{prefix}/global/balancer` | LB algorithm, retries, DNS, health check thresholds |
-| `{prefix}/global/proxy` | Connect/send/read/WebSocket/SSE/gRPC timeouts |
-| `{prefix}/global/cache` | OSS endpoint, bucket, region, SSL, TTL, max size |
-| `{prefix}/global/ssl` | ACME environment, email, providers, renewal days |
-| `{prefix}/global/logging` | Redis log push, stream max length |
-| `{prefix}/global/compression` | Compression algorithms, level, min size, MIME types |
-| `{prefix}/global/image_optimization` | Image formats, quality, max dimensions, optimizable types |
+| etcd Key | 内容 |
+|----------|------|
+| `{prefix}/global/redis` | Redis 模式、哨兵、主机、端口、超时、连接池 |
+| `{prefix}/global/security` | WAF 模式、CC 默认值、信任代理、CC 挑战密钥、管理 Token |
+| `{prefix}/global/balancer` | 负载均衡算法、重试、DNS、健康检查阈值 |
+| `{prefix}/global/proxy` | 连接/发送/读取/WebSocket/SSE/gRPC 超时 |
+| `{prefix}/global/cache` | OSS 端点、桶、区域、SSL、TTL、最大大小 |
+| `{prefix}/global/ssl` | ACME 环境、邮箱、提供商、续期天数 |
+| `{prefix}/global/logging` | Redis 日志推送、Stream 最大长度 |
+| `{prefix}/global/compression` | 压缩算法、级别、最小大小、MIME 类型 |
+| `{prefix}/global/image_optimization` | 图片格式、质量、最大尺寸、可优化类型 |
 
-Example: set Redis config for the entire cluster:
+示例：为整个集群设置 Redis 配置：
 
 ```bash
 etcdctl put /nozdormu/global/redis '{
@@ -176,11 +190,11 @@ etcdctl put /nozdormu/global/redis '{
 }'
 ```
 
-If no global keys exist in etcd, the system falls back to defaults (fully backward compatible).
+如果 etcd 中没有全局 Key，系统回退到默认值（完全向后兼容）。
 
-### Tier 3: Site Configuration (etcd Per-Site)
+### 第三层：站点配置（etcd 按站点）
 
-Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
+站点以 JSON 格式存储在 etcd `{prefix}/sites/{site_id}`。示例：
 
 ```json
 {
@@ -234,26 +248,32 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
       { "path": "/api/login", "rate": 5, "window": 60, "action": "challenge" }
     ]
   },
-  "protocol": {
-    "force_https": { "enable": true, "https_port": 443, "redirect_code": 301, "exclude_paths": ["/health", "/.well-known/"] },
-    "websocket": { "enable": true },
-    "grpc": { "enabled": true }
+  "streaming": {
+    "auth": {
+      "enabled": true,
+      "auth_type": "b",
+      "auth_key": "your-secret-key",
+      "expire_time": 1800
+    },
+    "dynamic_packaging": {
+      "enabled": true,
+      "segment_duration": 6.0,
+      "max_mp4_size": 2147483648
+    },
+    "prefetch": {
+      "enabled": true,
+      "prefetch_count": 3,
+      "concurrency_limit": 4
+    }
   },
   "compression": {
     "enabled": true,
-    "algorithms": ["zstd", "brotli", "gzip"],
-    "level": 6,
-    "min_size": 256,
-    "compressible_types": ["text/*", "application/json", "application/javascript", "image/svg+xml"]
+    "algorithms": ["zstd", "brotli", "gzip"]
   },
   "image_optimization": {
     "enabled": true,
     "formats": ["avif", "webp"],
-    "default_quality": 80,
-    "max_width": 4096,
-    "max_height": 4096,
-    "max_input_size": 52428800,
-    "optimizable_types": ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff"]
+    "default_quality": 80
   },
   "range": {
     "enabled": true,
@@ -262,58 +282,58 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
 }
 ```
 
-Changes are picked up automatically via etcd watch (no restart needed). Manual reload is available via the admin API:
+配置变更通过 etcd watch 自动生效（无需重启）。也可通过管理 API 手动重载：
 
 ```bash
 curl -X POST http://localhost:8080/reload
 ```
 
-See [`docs/global/`](docs/global/) for all global config examples and [`docs/site/`](docs/site/) for all site config examples.
+详见 [`docs/global/`](docs/global/) 全局配置示例和 [`docs/site/`](docs/site/) 站点配置示例。
 
-## Ports
+## 端口
 
-| Port | Service |
-|------|---------|
-| 6188 | HTTP proxy |
-| 6190 | Prometheus metrics |
-| 8080 | Admin API (localhost only) |
+| 端口 | 服务 |
+|------|------|
+| 6188 | HTTP 代理 |
+| 6190 | Prometheus 指标 |
+| 8080 | 管理 API（仅限本机） |
 
-## Development
+## 开发
 
 ```bash
-# Run unit/integration tests (340 tests)
+# 运行单元/集成测试（407 个测试）
 cargo test
 
-# Lint
+# 代码检查
 cargo clippy --workspace
 
-# Format
+# 格式化
 cargo fmt --all
 
-# Dev mode with hot-reload (requires cargo-watch)
+# 开发模式热重载（需要 cargo-watch）
 cargo watch -x "run -p cdn-proxy -- -c config/default.yaml"
 ```
 
-### E2E Functional Tests
+### E2E 功能测试
 
-End-to-end tests exercise the full proxy with real infrastructure (etcd, Redis, Python backends, GeoIP):
+端到端测试使用真实基础设施（etcd、Redis、Python 后端、GeoIP）运行完整代理：
 
 ```bash
-# Start infra + backends + proxy
+# 启动基础设施 + 后端 + 代理
 bash tests/e2e/setup.sh
 
-# Run all 79 tests (WAF, CC, cache, LB, compression, redirects, headers, admin)
+# 运行全部 79 个测试（WAF、CC、缓存、负载均衡、压缩、重定向、头部、管理 API）
 bash tests/e2e/run_tests.sh
 
-# Run specific test groups
+# 运行特定测试组
 bash tests/e2e/run_tests.sh waf cc compress
 
-# Stop everything
+# 停止所有服务
 bash tests/e2e/teardown.sh
 ```
 
-See [CLAUDE.md](CLAUDE.md) for detailed development guidelines.
+详见 [CLAUDE.md](CLAUDE.md) 开发指南。
 
-## License
+## 许可证
 
-Internal project. Not published.
+内部项目，未发布。

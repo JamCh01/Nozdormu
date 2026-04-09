@@ -159,6 +159,7 @@ mod tests {
             compression: CompressionConfig::default(),
             image_optimization: ImageOptimizationConfig::default(),
             range: RangeConfig::default(),
+            streaming: StreamingConfig::default(),
         }
     }
 
