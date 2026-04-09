@@ -1,0 +1,49 @@
+{
+  "_doc": "图片优化配置详解 — 实时裁剪/格式转换/质量调整/自适应",
+  "_query_params": "通过 URL 查询参数控制: ?w=200&h=150&fit=cover&fmt=webp&q=80&dpr=2",
+  "_skip_conditions": "以下情况跳过图片优化: 非图片 Content-Type、超过 max_input_size、客户端请求了 Range（Range 优先级低于图片优化）",
+
+  "site_id": "image-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["img.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "image_optimization": {
+    "enabled": true,
+
+    "_formats": "服务端优先格式列表，与客户端 Accept 头协商。AVIF 压缩率最高、WebP 次之",
+    "_formats_note": "当请求未指定 ?fmt= 时，按此顺序尝试匹配客户端 Accept 头",
+    "formats": ["avif", "webp"],
+
+    "_default_quality": "默认输出质量 1-100，可通过 ?q= 参数覆盖",
+    "default_quality": 80,
+
+    "_max_width": "最大输出宽度（像素），超过此值会被裁剪",
+    "max_width": 4096,
+
+    "_max_height": "最大输出高度（像素），超过此值会被裁剪",
+    "max_height": 4096,
+
+    "_max_input_size": "最大输入文件大小（字节），超过则跳过优化直接透传",
+    "max_input_size": 52428800,
+
+    "_optimizable_types": "可优化的源图片 MIME 类型列表",
+    "optimizable_types": [
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "image/bmp",
+      "image/tiff"
+    ]
+  },
+
+  "_usage_examples": {
+    "_resize_auto_format": "curl -H 'Accept: image/avif,image/webp,*/*' 'http://img.example.com/photo.jpg?w=200&h=150&fit=cover&q=80'",
+    "_explicit_format": "curl 'http://img.example.com/photo.jpg?w=400&fmt=webp&q=75'",
+    "_dpr_aware": "curl 'http://img.example.com/photo.jpg?w=200&dpr=2' (实际输出 400px)",
+    "_fit_modes": "contain(默认,等比缩放) | cover(填充+裁剪) | fill(拉伸) | inside(不放大) | outside(不缩小)"
+  }
+}

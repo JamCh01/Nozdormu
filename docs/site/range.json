@@ -1,0 +1,34 @@
+{
+  "_doc": "Range 请求配置详解 — 客户端断点续传 + 大文件分片回源",
+  "_behavior": "启用后: 解析客户端 Range 头、缓存命中时从缓存切片返回 206、缓存未命中时透传 Range 到源站",
+  "_skip_conditions": "以下情况忽略 Range: 图片优化激活时（图片优化优先）、非 HTTP 协议（WebSocket/SSE/gRPC）",
+
+  "site_id": "range-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["dl.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "range": {
+    "_enabled": "是否启用 Range 请求处理（默认 true）",
+    "_enabled_note": "启用后自动在可缓存响应中添加 Accept-Ranges: bytes 头",
+    "enabled": true,
+
+    "_chunk_size": "分片回源块大小（字节），Phase 2 功能预留字段",
+    "_chunk_size_note": "当前版本仅用于配置预留，实际分片回源功能将在后续版本实现",
+    "chunk_size": 4194304
+  },
+
+  "_features": {
+    "_client_resume": "客户端发送 Range: bytes=0-999 时，CDN 解析并处理",
+    "_accept_ranges": "所有可缓存 HTTP 响应自动添加 Accept-Ranges: bytes",
+    "_if_range": "支持 If-Range 条件请求（强 ETag 比较 + HTTP 日期比较）",
+    "_pass_through": "缓存未命中时，将客户端 Range 头透传到源站，中继 206 响应",
+    "_origin_200_fallback": "源站忽略 Range 返回 200 时，CDN 缓冲完整响应后切片返回",
+    "_compression_skip": "Range 响应自动跳过压缩（字节偏移基于未压缩内容）",
+    "_supported_formats": "bytes=0-499（单范围）、bytes=-500（后缀）、bytes=500-（开放式）",
+    "_rejected_formats": "bytes=0-499, 500-999（多范围请求被拒绝，返回完整 200）"
+  }
+}

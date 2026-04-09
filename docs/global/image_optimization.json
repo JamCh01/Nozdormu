@@ -1,0 +1,29 @@
+{
+  "_doc": "etcd key: {prefix}/global/image_optimization — 全局默认图片优化配置，站点级可覆盖",
+
+  "enabled": false,
+
+  "_formats": "服务端优先格式列表，与客户端 Accept 头协商选择最优格式。可选: avif, webp, jpeg, png",
+  "formats": ["avif", "webp"],
+
+  "_default_quality": "默认输出质量 1-100，客户端可通过 ?q= 参数覆盖",
+  "default_quality": 80,
+
+  "_max_width": "最大输出宽度（像素），1-16384",
+  "max_width": 4096,
+
+  "_max_height": "最大输出高度（像素），1-16384",
+  "max_height": 4096,
+
+  "_max_input_size": "最大输入文件大小（字节），超过则跳过优化直接透传。默认 50MB",
+  "max_input_size": 52428800,
+
+  "_optimizable_types": "可优化的源图片 MIME 类型列表",
+  "optimizable_types": [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/bmp",
+    "image/tiff"
+  ]
+}

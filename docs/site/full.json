@@ -149,5 +149,20 @@
       "application/xml",
       "image/svg+xml"
     ]
+  },
+
+  "image_optimization": {
+    "enabled": true,
+    "formats": ["avif", "webp"],
+    "default_quality": 80,
+    "max_width": 4096,
+    "max_height": 4096,
+    "max_input_size": 52428800,
+    "optimizable_types": ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff"]
+  },
+
+  "range": {
+    "enabled": true,
+    "chunk_size": 4194304
   }
 }

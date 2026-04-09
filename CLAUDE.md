@@ -53,8 +53,8 @@ Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-image` / `
 
 Detailed JSON examples with inline documentation for every config option:
 
-- **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression
-- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, ssl, full
+- **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization
+- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, image_optimization, range, ssl, full
 
 ## Architecture Essentials
 
