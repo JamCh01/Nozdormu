@@ -369,6 +369,30 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── 10.5. Range request handling ──
+        if let Some(ref site) = ctx.site_config {
+            if site.range.enabled {
+                if let Some(range_val) = session
+                    .req_header()
+                    .headers
+                    .get("range")
+                    .and_then(|v| v.to_str().ok())
+                {
+                    if let Some(spec) = crate::range::parse_range_header(range_val) {
+                        ctx.range_request = Some(spec);
+                        match ctx.cache_status {
+                            CacheStatus::Hit => {
+                                ctx.range_served_from_cache = true;
+                            }
+                            _ => {
+                                ctx.range_passthrough = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── 11. Image optimization: parse query params ──
         if let Some(ref site) = ctx.site_config {
             if site.image_optimization.enabled {
@@ -511,6 +535,25 @@ impl ProxyHttp for CdnProxy {
             _ => {}
         }
 
+        // ── Range pass-through ──
+        if ctx.range_passthrough && ctx.image_params.is_none() {
+            if let Some(range_val) = session
+                .req_header()
+                .headers
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+            {
+                upstream_request
+                    .insert_header("Range", range_val)
+                    .ok();
+            }
+        } else if ctx.range_request.is_some() && ctx.image_params.is_some() {
+            // Range + image optimization conflict: image wins
+            ctx.range_request = None;
+            ctx.range_passthrough = false;
+            ctx.range_served_from_cache = false;
+        }
+
         Ok(())
     }
 
@@ -533,6 +576,13 @@ impl ProxyHttp for CdnProxy {
         upstream_response
             .insert_header("X-Request-ID", &ctx.request_id)
             .ok();
+
+        // ── Accept-Ranges advertisement ──
+        if matches!(ctx.protocol_type, ProtocolType::Http) && ctx.cache_key.is_some() {
+            upstream_response
+                .insert_header("Accept-Ranges", "bytes")
+                .ok();
+        }
 
         // Custom response header rules
         if let Some(ref site) = ctx.site_config {
@@ -568,6 +618,29 @@ impl ProxyHttp for CdnProxy {
                     .ok();
             }
             _ => {}
+        }
+
+        // ── Range response handling ──
+        if ctx.range_request.is_some() && ctx.image_params.is_none() {
+            let status = upstream_response.status.as_u16();
+
+            if ctx.range_passthrough && status == 206 {
+                // Origin returned 206: relay as-is, skip compression
+                crate::logging::metrics::RANGE_REQUESTS_TOTAL
+                    .with_label_values(&[ctx.site_id.as_str(), "passthrough"])
+                    .inc();
+            } else if ctx.range_passthrough && status == 200 {
+                // Origin returned full 200 despite our Range request.
+                // Note Content-Length for body-filter slicing.
+                if let Some(cl) = upstream_response
+                    .headers
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                {
+                    ctx.total_content_length = Some(cl);
+                }
+            }
         }
 
         // ── Image optimization setup ──
@@ -651,10 +724,11 @@ impl ProxyHttp for CdnProxy {
         // ── Response compression setup ──
         // Skip for non-HTTP protocols (WebSocket/SSE/gRPC)
         // Skip if image buffering is active (images are already compressed)
-        if !ctx.image_buffering && matches!(
-            ctx.protocol_type,
-            ProtocolType::Http
-        ) {
+        // Skip if Range request is active (byte offsets refer to uncompressed content)
+        if !ctx.image_buffering
+            && ctx.range_request.is_none()
+            && matches!(ctx.protocol_type, ProtocolType::Http)
+        {
             // Skip if upstream already compressed
             let already_encoded = upstream_response
                 .headers
@@ -744,6 +818,43 @@ impl ProxyHttp for CdnProxy {
     where
         Self::CTX: Send + Sync,
     {
+        // ── Range slice from origin 200 path ──
+        // Origin returned full 200 but client wanted Range. Buffer full body,
+        // then slice on end_of_stream.
+        if ctx.range_request.is_some()
+            && !ctx.image_buffering
+            && ctx.total_content_length.is_some()
+            && ctx.image_params.is_none()
+        {
+            if let Some(data) = body.take() {
+                ctx.range_body_buffer.extend_from_slice(&data);
+                *body = Some(Bytes::new());
+            }
+            if end_of_stream {
+                let full_body = std::mem::take(&mut ctx.range_body_buffer);
+                let total = full_body.len() as u64;
+                if let Some(ref spec) = ctx.range_request {
+                    match crate::range::resolve_range(spec, total) {
+                        Ok((start, end)) => {
+                            let sliced = crate::range::slice_body(&full_body, start, end);
+                            log::debug!(
+                                "[Range] sliced origin 200: bytes {}-{}/{} ({} bytes)",
+                                start, end, total, sliced.len()
+                            );
+                            *body = Some(Bytes::from(sliced));
+                        }
+                        Err(_) => {
+                            log::debug!("[Range] not satisfiable, serving full body");
+                            *body = Some(Bytes::from(full_body));
+                        }
+                    }
+                } else {
+                    *body = Some(Bytes::from(full_body));
+                }
+            }
+            return Ok(None);
+        }
+
         // ── Image optimization path (mutually exclusive with compression) ──
         if ctx.image_buffering {
             // Accumulate chunks into buffer
@@ -931,6 +1042,7 @@ impl ProxyHttp for CdnProxy {
             waf_reason: ctx.waf_reason.clone(),
             cc_blocked: ctx.cc_blocked,
             cc_reason: ctx.cc_reason.clone(),
+            range_request: ctx.range_request.is_some(),
             node_id: String::new(), // TODO: inject from NodeConfig
         });
     }
@@ -1108,6 +1220,60 @@ impl CdnProxy {
         }
         session.write_response_header(Box::new(header), false).await?;
         session.write_response_body(Some("".into()), true).await?;
+        Ok(true)
+    }
+
+    #[allow(dead_code)]
+    async fn serve_range_not_satisfiable(
+        &self,
+        session: &mut Session,
+        total_size: u64,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(416, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        header.insert_header(
+            "Content-Range",
+            crate::range::content_range_unsatisfied(total_size),
+        )?;
+        header.insert_header("Accept-Ranges", "bytes")?;
+        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_body(Some("Range Not Satisfiable\n".into()), true)
+            .await?;
+        Ok(true)
+    }
+
+    #[allow(dead_code)]
+    async fn serve_partial_content(
+        &self,
+        session: &mut Session,
+        body: Vec<u8>,
+        start: u64,
+        end: u64,
+        total: u64,
+        original_headers: &std::collections::HashMap<String, String>,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(206, None)?;
+        header.insert_header(
+            "Content-Range",
+            crate::range::content_range_header(start, end, total),
+        )?;
+        header.insert_header("Content-Length", (end - start + 1).to_string())?;
+        header.insert_header("Accept-Ranges", "bytes")?;
+        // Copy relevant headers from cached meta
+        for (name, value) in original_headers {
+            if name.eq_ignore_ascii_case("content-type")
+                || name.eq_ignore_ascii_case("etag")
+                || name.eq_ignore_ascii_case("last-modified")
+                || name.eq_ignore_ascii_case("cache-control")
+            {
+                let n = name.clone();
+                let v = value.clone();
+                header.insert_header(n, v).ok();
+            }
+        }
+        session.write_response_header(Box::new(header), false).await?;
+        session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
 }

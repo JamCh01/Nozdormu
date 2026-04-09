@@ -129,6 +129,41 @@ impl CacheStorage {
         }
     }
 
+    /// Read a byte range from a cached response body.
+    /// Uses OSS Range GET to avoid loading the entire file into memory.
+    /// Returns None on miss, expiry, or error.
+    pub async fn get_range(
+        &self,
+        site_id: &str,
+        cache_key: &str,
+        start: u64,
+        end: u64,
+    ) -> Option<(CacheMeta, Vec<u8>)> {
+        let oss = self.oss.as_ref()?;
+        let object_path = cache_object_path(site_id, cache_key);
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+
+        // Must have valid, non-expired meta
+        if let Some(ref redis) = self.redis {
+            if let Some(meta_json) = redis.get(&redis_key).await {
+                if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
+                    let now = chrono::Utc::now().timestamp();
+                    if meta.expires_at <= now {
+                        return None;
+                    }
+                    match oss.get_object_range(&object_path, start, end).await {
+                        Ok(body) => return Some((meta, body)),
+                        Err(e) => {
+                            log::warn!("[Cache] OSS range get failed: {}", e);
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Write a response to cache.
     /// This is called asynchronously (fire-and-forget via tokio::spawn).
     pub async fn put(

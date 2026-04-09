@@ -175,6 +175,17 @@ pub static IMAGE_OPTIMIZATION_SIZE_RATIO: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Range Requests ──
+
+pub static RANGE_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_range_requests_total",
+        "Total Range requests received",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

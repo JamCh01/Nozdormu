@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (315 unit/integration tests across 5 crates)
+# Run all tests (340 unit/integration tests across 5 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -68,6 +68,7 @@ Detailed JSON examples with inline documentation for every config option:
 - **Thread-local caches**: Regex patterns (LRU, cap 256), WAF IP sets (keyed by version counter to avoid ABA).
 - **Response compression**: gzip/Brotli/Zstd via `response_body_filter` streaming. Negotiated per-request from `Accept-Encoding`. Two-tier config: per-site override + global default. Skipped for WebSocket/SSE/gRPC and non-compressible MIME types.
 - **Image optimization**: On-the-fly resize/crop, format conversion (JPEG/PNG/WebP/AVIF), quality adjustment via query params (`?w=200&h=150&fit=cover&fmt=webp&q=80&dpr=2`). Auto-negotiates output format from `Accept` header (AVIF > WebP > original). Full-body buffering in `response_body_filter` (images require complete data before processing). Image path and compression path are mutually exclusive. Uses `image` crate for decode/encode + `fast_image_resize` for SIMD-optimized resize. Graceful degradation: serves original image on processing failure. Cache key correctness is automatic (query params already included in MD5 hash).
+- **Range requests**: Client resume/continuation support (RFC 7233). Parses `Range: bytes=X-Y` headers (single range, suffix, open-ended; multi-range rejected). Pass-through to origin on cache miss; serves byte ranges from cached full bodies on cache hit. Advertises `Accept-Ranges: bytes` on cacheable responses. Supports `If-Range` conditional (strong ETag comparison + HTTP-date). Range is mutually exclusive with both image optimization (image wins) and compression (byte offsets refer to uncompressed content). OSS Range GET (`get_object_range`) avoids loading entire cached files into memory. Per-site `RangeConfig { enabled, chunk_size }` — `chunk_size` reserved for Phase 2 chunked origin-pull.
 
 ## Key Patterns
 
@@ -129,6 +130,7 @@ Critical production requirements:
 - Health probe tests use `HealthChecker` directly with `ProbeState` threshold logic (no network needed)
 - Purge tests use `PurgeTaskTracker` directly and serde deserialization (no Redis/OSS needed)
 - Image tests use in-memory generated JPEG/PNG test images, verify decode/resize/encode round-trips and dimension correctness
+- Range tests use pure unit tests for parsing, resolution, Content-Range formatting, If-Range validation, and body slicing (no network needed)
 
 ### E2E Tests
 

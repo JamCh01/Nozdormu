@@ -37,6 +37,7 @@ pub struct LogEntry {
     pub waf_reason: Option<String>,
     pub cc_blocked: bool,
     pub cc_reason: Option<String>,
+    pub range_request: bool,
     pub node_id: String,
 }
 

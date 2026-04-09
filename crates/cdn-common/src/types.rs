@@ -41,6 +41,8 @@ pub struct SiteConfig {
     pub compression: CompressionConfig,
     #[serde(default)]
     pub image_optimization: ImageOptimizationConfig,
+    #[serde(default)]
+    pub range: RangeConfig,
 }
 
 impl SiteConfig {
@@ -792,4 +794,31 @@ fn default_image_optimizable_types() -> Vec<String> {
         "image/bmp".to_string(),
         "image/tiff".to_string(),
     ]
+}
+
+// ============================================================
+// Range Request / Chunked Origin-Pull
+// ============================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RangeConfig {
+    /// Enable Range request handling (client resume support)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Chunk size in bytes for future chunked origin-pull (Phase 2)
+    #[serde(default = "default_range_chunk_size")]
+    pub chunk_size: u64,
+}
+
+impl Default for RangeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            chunk_size: default_range_chunk_size(),
+        }
+    }
+}
+
+fn default_range_chunk_size() -> u64 {
+    4 * 1024 * 1024 // 4 MB
 }

@@ -131,6 +131,59 @@ impl OssClient {
         }
     }
 
+    /// GET a byte range of an object.
+    /// Returns the requested range bytes on success (HTTP 206 or 200).
+    pub async fn get_object_range(
+        &self,
+        key: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<u8>, OssError> {
+        let url = self.object_url(key);
+        let now = Utc::now();
+        let date_str = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_short = now.format("%Y%m%d").to_string();
+
+        let content_hash = sha256_hex(b"");
+        let host = self.host();
+        let range_value = format!("bytes={}-{}", start, end);
+
+        let mut headers = BTreeMap::new();
+        headers.insert("host".to_string(), host.clone());
+        headers.insert("range".to_string(), range_value.clone());
+        headers.insert("x-amz-date".to_string(), date_str.clone());
+        headers.insert("x-amz-content-sha256".to_string(), content_hash.clone());
+
+        let canonical_uri = self.canonical_uri(key);
+        let authorization = self.sign_v4(
+            "GET", &canonical_uri, "", &headers, &content_hash, &date_str, &date_short,
+        );
+
+        let resp = self.http_client
+            .get(&url)
+            .header("Host", &host)
+            .header("Range", &range_value)
+            .header("X-Amz-Date", &date_str)
+            .header("X-Amz-Content-Sha256", &content_hash)
+            .header("Authorization", &authorization)
+            .send()
+            .await
+            .map_err(|e| OssError::Network(e.to_string()))?;
+
+        let status = resp.status().as_u16();
+        if status == 206 || status == 200 {
+            resp.bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| OssError::Network(e.to_string()))
+        } else if status == 404 {
+            Err(OssError::NotFound)
+        } else {
+            let body = resp.text().await.unwrap_or_default();
+            Err(OssError::Api(status, body))
+        }
+    }
+
     /// DELETE an object.
     pub async fn delete_object(&self, key: &str) -> Result<(), OssError> {
         let url = self.object_url(key);

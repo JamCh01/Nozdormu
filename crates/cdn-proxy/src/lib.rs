@@ -1,6 +1,7 @@
 pub mod proxy;
 pub mod context;
 pub mod compression;
+pub mod range;
 pub mod protocol;
 pub mod balancer;
 pub mod health;

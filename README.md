@@ -9,6 +9,7 @@ High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudfl
 - **Rate Limiting (CC)** -- Hybrid local+Redis counters, JS challenge (HMAC-SHA256), per-path rules with longest-prefix matching
 - **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance, cache purge API (exact URL + site-wide)
 - **Image Optimization** -- On-the-fly resize/crop (5 fit modes), format conversion (JPEG/PNG/WebP/AVIF), quality adjustment, auto-format negotiation via `Accept` header, DPR-aware adaptive sizing; pure Rust (`image` + `fast_image_resize`)
+- **Range Requests** -- Client resume/continuation (断点续传), `Accept-Ranges: bytes` advertisement, `If-Range` conditional support, Range pass-through to origin, OSS Range GET for memory-efficient cached range serving; per-site enable/disable
 - **Multi-Protocol** -- HTTP, WebSocket, SSE, gRPC (native + gRPC-Web) with per-protocol timeout and header handling
 - **Load Balancing** -- Weighted round-robin, IP hash, random; active health checks (HTTP/TCP probes) + passive health tracking with automatic failover to backup origins
 - **SSL/TLS** -- Multi-provider ACME (Let's Encrypt, ZeroSSL, Buypass, Google), automatic renewal, distributed locking
@@ -42,12 +43,14 @@ Client -> Pingora Listener
   -> Redirect check (domain -> protocol -> URL rules)
   -> Protocol detection (gRPC > WebSocket > SSE > HTTP)
   -> Image param parsing (w/h/fit/fmt/q/dpr from query string)
+  -> Range request handling (parse Range header, pass-through or cache serve)
   -> Cache lookup (key generation -> Redis meta -> OSS body)
   -> Load balancer (health filter -> algorithm -> DNS resolve -> HttpPeer)
   -> Upstream request (header injection, protocol-specific headers)
   -> Response filter (header rules, cache write, security headers)
   -> Image optimization (detect image type, negotiate format, buffer+process)
-  -> Compression (gzip/Brotli/Zstd, skipped for images)
+  -> Range response (slice cached body or relay origin 206, skip compression)
+  -> Compression (gzip/Brotli/Zstd, skipped for images and Range responses)
   -> Logging (Prometheus metrics, Redis Streams, passive health update)
 ```
 
@@ -251,6 +254,10 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
     "max_height": 4096,
     "max_input_size": 52428800,
     "optimizable_types": ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff"]
+  },
+  "range": {
+    "enabled": true,
+    "chunk_size": 4194304
   }
 }
 ```
@@ -274,7 +281,7 @@ See [`docs/global/`](docs/global/) for all global config examples and [`docs/sit
 ## Development
 
 ```bash
-# Run unit/integration tests (315 tests)
+# Run unit/integration tests (340 tests)
 cargo test
 
 # Lint

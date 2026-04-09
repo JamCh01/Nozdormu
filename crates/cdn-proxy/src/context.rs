@@ -68,6 +68,13 @@ pub struct ProxyCtx {
     pub image_auto_negotiated: bool,
     pub image_buffer: Vec<u8>,
     pub image_buffering: bool,
+
+    // === Range request state ===
+    pub range_request: Option<crate::range::RangeSpec>,
+    pub range_passthrough: bool,
+    pub range_served_from_cache: bool,
+    pub total_content_length: Option<u64>,
+    pub range_body_buffer: Vec<u8>,
 }
 
 impl Default for ProxyCtx {
@@ -101,6 +108,11 @@ impl Default for ProxyCtx {
             image_auto_negotiated: false,
             image_buffer: Vec::new(),
             image_buffering: false,
+            range_request: None,
+            range_passthrough: false,
+            range_served_from_cache: false,
+            total_content_length: None,
+            range_body_buffer: Vec::new(),
         }
     }
 }

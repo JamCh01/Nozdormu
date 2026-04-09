@@ -158,6 +158,7 @@ mod tests {
             timeouts: TimeoutsConfig::default(),
             compression: CompressionConfig::default(),
             image_optimization: ImageOptimizationConfig::default(),
+            range: RangeConfig::default(),
         }
     }
 
