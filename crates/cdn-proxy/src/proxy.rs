@@ -212,6 +212,47 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── 6.5. Body inspection: Content-Length pre-check ──
+        if let Some(ref site) = ctx.site_config {
+            if site.waf.body_inspection.enabled {
+                let method = session.req_header().method.as_str();
+                let content_length = session
+                    .req_header()
+                    .headers
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+
+                let result = cdn_middleware::waf::body::check_content_length(
+                    content_length,
+                    method,
+                    &site.waf.body_inspection,
+                );
+                match result {
+                    cdn_middleware::waf::body::BodyCheckResult::TooLarge { limit, actual } => {
+                        ctx.body_rejected = true;
+                        crate::logging::metrics::BODY_INSPECTION_TOTAL
+                            .with_label_values(&[ctx.site_id.as_str(), "size_rejected"])
+                            .inc();
+                        return self.serve_payload_too_large(session, limit, actual).await;
+                    }
+                    cdn_middleware::waf::body::BodyCheckResult::Allow => {
+                        if site
+                            .waf
+                            .body_inspection
+                            .inspect_methods
+                            .iter()
+                            .any(|m| m.eq_ignore_ascii_case(method))
+                        {
+                            ctx.body_inspection_enabled = true;
+                            ctx.body_max_size = site.waf.body_inspection.max_body_size;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // ── 7. CC check ──
         if let Some(ref site) = ctx.site_config {
             if let Some(client_ip) = ctx.client_ip {
@@ -477,6 +518,82 @@ impl ProxyHttp for CdnProxy {
         }
 
         Ok(false) // Continue to upstream_peer
+    }
+
+    async fn request_body_filter(
+        &self,
+        session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        if !ctx.body_inspection_enabled || ctx.body_rejected {
+            return Ok(());
+        }
+
+        if let Some(ref data) = body {
+            ctx.body_bytes_received += data.len() as u64;
+
+            // Size enforcement (incremental, catches chunked transfers without Content-Length)
+            if ctx.body_max_size > 0 && ctx.body_bytes_received > ctx.body_max_size {
+                ctx.body_rejected = true;
+                *body = None;
+                crate::logging::metrics::BODY_INSPECTION_TOTAL
+                    .with_label_values(&[ctx.site_id.as_str(), "size_rejected"])
+                    .inc();
+                let _ = session.respond_error(413).await;
+                return Ok(());
+            }
+
+            // Buffer first bytes for magic detection (only if not yet checked)
+            if !ctx.body_inspection_checked {
+                let needed = 8192_usize.saturating_sub(ctx.body_first_chunk.len());
+                if needed > 0 {
+                    let take = data.len().min(needed);
+                    ctx.body_first_chunk.extend_from_slice(&data[..take]);
+                }
+
+                // Check when we have enough bytes or end_of_stream
+                if ctx.body_first_chunk.len() >= 8192 || end_of_stream {
+                    ctx.body_inspection_checked = true;
+                    if let Some(ref site) = ctx.site_config {
+                        let declared_ct = session
+                            .req_header()
+                            .headers
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok());
+                        let result = cdn_middleware::waf::body::check_magic_bytes(
+                            &ctx.body_first_chunk,
+                            declared_ct,
+                            &site.waf.body_inspection,
+                        );
+                        match result {
+                            cdn_middleware::waf::body::BodyCheckResult::ContentTypeBlocked {
+                                ..
+                            }
+                            | cdn_middleware::waf::body::BodyCheckResult::ContentTypeMismatch {
+                                ..
+                            } => {
+                                ctx.body_rejected = true;
+                                *body = None;
+                                let label = match result {
+                                    cdn_middleware::waf::body::BodyCheckResult::ContentTypeMismatch { .. } => "type_mismatch",
+                                    _ => "type_rejected",
+                                };
+                                crate::logging::metrics::BODY_INSPECTION_TOTAL
+                                    .with_label_values(&[ctx.site_id.as_str(), label])
+                                    .inc();
+                                let _ = session.respond_error(403).await;
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn upstream_peer(
@@ -1311,6 +1428,7 @@ impl ProxyHttp for CdnProxy {
             range_request: ctx.range_request.is_some(),
             packaging_request: ctx.packaging_request.is_some(),
             auth_validated: ctx.auth_cleaned_path.is_some(),
+            body_rejected: ctx.body_rejected,
             node_id: String::new(), // TODO: inject from NodeConfig
         });
     }
@@ -1428,6 +1546,30 @@ impl CdnProxy {
         header.insert_header("Content-Type", "text/plain")?;
         session.write_response_header(Box::new(header), false).await?;
         session.write_response_body(Some("Forbidden\n".into()), true).await?;
+        Ok(true)
+    }
+
+    async fn serve_payload_too_large(
+        &self,
+        session: &mut Session,
+        limit: u64,
+        actual: Option<u64>,
+    ) -> Result<bool> {
+        let body = match actual {
+            Some(a) => format!(
+                "Payload Too Large: {} bytes exceeds limit of {} bytes\n",
+                a, limit
+            ),
+            None => format!("Payload Too Large: limit is {} bytes\n", limit),
+        };
+        let mut header = ResponseHeader::build(413, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some(body.into()), true)
+            .await?;
         Ok(true)
     }
 

@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制
-- **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式
+- **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式，请求体检查（POST Body 大小限制 + 基于魔数字节的内容类型校验，使用 `infer` 库检测 200+ 文件类型）
 - **CC 防护（频率限制）** -- 本地+Redis 混合计数器，JS 挑战（HMAC-SHA256），按路径规则最长前缀匹配
 - **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除）
 - **图片优化** -- 实时裁剪/缩放（5 种 fit 模式），格式转换（JPEG/PNG/WebP/AVIF），质量调整，通过 `Accept` 头自动协商格式，DPR 自适应；纯 Rust 实现（`image` + `fast_image_resize`）
@@ -32,7 +32,7 @@ crates/
   cdn-cache         缓存策略、Key 生成、S3/OSS 客户端（AWS Sig v4）、批量清除
   cdn-image         图片优化：裁剪/缩放、格式转换、质量调整、Accept 协商
   cdn-streaming     视频流优化：URL 签名鉴权、MP4→HLS 动态转封装、HLS/DASH 智能预取
-  cdn-middleware     WAF 引擎、CC 引擎、重定向引擎、头部规则
+  cdn-middleware     WAF 引擎（IP/GeoIP + 请求体检查）、CC 引擎、重定向引擎、头部规则
   cdn-proxy          主程序：Pingora 代理、负载均衡、DNS、SSL、主动健康探测、管理 API
 ```
 
@@ -44,6 +44,7 @@ crates/
   -> 站点路由（域名 -> SiteConfig，精确/通配符匹配）
   -> 客户端 IP 提取（XFF 防伪造，可配置信任代理）
   -> WAF 检查（IP 前缀树 -> GeoIP -> ASN -> 国家 -> 地区）
+  -> 请求体预检（Content-Length 大小限制，超限直接 413）
   -> CC 检查（封禁缓存 -> 挑战验证 -> 计数器 -> 阈值）
   -> 边缘鉴权（URL 签名验证 Type A/B/C，剥离 Token 后传递原始路径）
   -> 重定向检查（域名 -> 协议 -> URL 规则）
@@ -53,6 +54,7 @@ crates/
   -> Range 请求处理（解析 Range 头，透传或缓存分片服务）
   -> 缓存查找（Key 生成 -> Redis 元数据 -> OSS 对象体）
   -> 负载均衡（健康过滤 -> 算法选择 -> DNS 解析 -> HttpPeer）
+  -> 请求体检查（逐块大小累计 + 魔数字节内容类型校验，超限 413/403）
   -> 上游请求（头部注入，协议特定头部）
   -> 响应过滤（头部规则、缓存写入、安全头部）
   -> 动态转封装（MP4 解析 -> fMP4 分片生成 / m3u8 播放列表生成）
@@ -238,6 +240,13 @@ etcdctl put /nozdormu/global/redis '{
     "rules": {
       "ip_blacklist": ["192.168.0.0/16"],
       "country_whitelist": ["US", "JP", "DE"]
+    },
+    "body_inspection": {
+      "enabled": true,
+      "max_body_size": 26214400,
+      "allowed_content_types": ["image/*", "application/pdf"],
+      "blocked_content_types": ["application/x-executable"],
+      "inspect_methods": ["POST", "PUT", "PATCH"]
     }
   },
   "cc": {
@@ -301,7 +310,7 @@ curl -X POST http://localhost:8080/reload
 ## 开发
 
 ```bash
-# 运行单元/集成测试（407 个测试）
+# 运行单元/集成测试（432 个测试）
 cargo test
 
 # 代码检查

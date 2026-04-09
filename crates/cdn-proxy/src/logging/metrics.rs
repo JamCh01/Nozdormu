@@ -218,6 +218,17 @@ pub static PACKAGING_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Body Inspection ──
+
+pub static BODY_INSPECTION_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_body_inspection_total",
+        "Total body inspection results",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

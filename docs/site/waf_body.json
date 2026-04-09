@@ -1,0 +1,61 @@
+{
+  "_doc": "请求体检查配置详解 — POST Body 大小限制 + 内容类型魔数校验",
+  "_behavior": "启用后: 在 request_filter 中预检 Content-Length，在 request_body_filter 中逐块检查大小并通过魔数字节验证文件真实类型",
+  "_rejection": "超大请求体返回 413 Payload Too Large，内容类型不匹配或被禁止返回 403 Forbidden",
+
+  "site_id": "body-inspection-site",
+  "enabled": true,
+  "port": 80,
+  "domains": ["upload.example.com"],
+  "origins": [
+    { "id": "origin-1", "host": "10.0.0.1", "port": 8080, "weight": 10, "protocol": "http" }
+  ],
+
+  "waf": {
+    "enabled": true,
+    "mode": "block",
+    "rules": {
+      "ip_whitelist": [],
+      "ip_blacklist": []
+    },
+
+    "body_inspection": {
+      "_enabled": "是否启用请求体检查",
+      "enabled": true,
+
+      "_max_body_size": "最大请求体大小（字节），0 = 不限制，默认 25MB (26214400)",
+      "_max_body_size_note": "Content-Length 超限时在 request_filter 中直接返回 413（不接收 body）；无 Content-Length 时在 request_body_filter 中逐块累计检查",
+      "max_body_size": 26214400,
+
+      "_allowed_content_types": "允许的 MIME 类型列表（基于魔数字节检测），为空则允许所有类型",
+      "_allowed_content_types_note": "支持通配符: 'image/*' 匹配所有图片类型。设置后未识别的文件类型会被拦截（fail-closed）",
+      "allowed_content_types": ["image/*", "application/pdf", "video/*"],
+
+      "_blocked_content_types": "禁止的 MIME 类型列表，在 allowed 检查之后执行",
+      "_blocked_content_types_note": "即使在 allowed 列表中，匹配 blocked 的类型也会被拦截",
+      "blocked_content_types": ["application/x-executable", "application/x-sharedlib"],
+
+      "_inspect_methods": "需要检查的 HTTP 方法，默认 POST/PUT/PATCH",
+      "_inspect_methods_note": "GET/HEAD/DELETE 等无 body 的方法默认不检查",
+      "inspect_methods": ["POST", "PUT", "PATCH"]
+    }
+  },
+
+  "_detection_engine": {
+    "_library": "使用 infer 库（基于魔数字节/文件签名），零依赖，微秒级延迟",
+    "_supported_types": "支持 200+ 文件类型: 图片(JPEG/PNG/GIF/WebP/AVIF/BMP/TIFF)、视频(MP4/AVI/MKV)、音频(MP3/FLAC/WAV)、文档(PDF/DOCX/XLSX)、压缩包(ZIP/GZIP/TAR/RAR)、可执行文件(ELF/PE/Mach-O) 等",
+    "_buffer_size": "缓冲请求体前 8KB 用于魔数检测，不影响后续数据转发"
+  },
+
+  "_two_phase_check": {
+    "_phase1": "request_filter: 检查 Content-Length 头（早期拒绝，不接收 body）",
+    "_phase2": "request_body_filter: 逐块累计大小 + 缓冲前 8KB 进行魔数检测",
+    "_defense_in_depth": "两阶段检查防御 Content-Length 缺失或伪造的情况"
+  },
+
+  "_mismatch_detection": {
+    "_behavior": "当声明的 Content-Type 头与魔数检测结果在类型族（type family）级别不匹配时返回 403",
+    "_example": "声明 application/pdf 但实际是 image/jpeg → 类型族不同（application vs image）→ 拦截",
+    "_same_family": "声明 image/png 但实际是 image/jpeg → 同一类型族（image）→ 放行"
+  }
+}

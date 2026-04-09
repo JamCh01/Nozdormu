@@ -22,3 +22,4 @@ tokio = { workspace = true }
 redis = { workspace = true }
 once_cell = { workspace = true }
 prometheus = { workspace = true }
+infer = { workspace = true }

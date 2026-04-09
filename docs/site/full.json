@@ -99,6 +99,13 @@
       "country_blacklist": [],
       "region_blacklist": {},
       "continent_blacklist": []
+    },
+    "body_inspection": {
+      "enabled": true,
+      "max_body_size": 26214400,
+      "allowed_content_types": ["image/*", "application/pdf", "video/*"],
+      "blocked_content_types": ["application/x-executable"],
+      "inspect_methods": ["POST", "PUT", "PATCH"]
     }
   },
 

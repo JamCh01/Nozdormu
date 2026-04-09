@@ -65,6 +65,7 @@ moka = { version = "0.12", features = ["future"] }
 crc32fast = "1"
 ring = "0.17"
 base64 = "0.22"
+infer = "0.16"
 
 # SSL/TLS
 instant-acme = "0.7"

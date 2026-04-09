@@ -1,3 +1,4 @@
+pub mod body;
 pub mod geo;
 pub mod ip;
 
@@ -313,6 +314,7 @@ mod tests {
             enabled: true,
             mode: WafMode::Block,
             rules,
+            ..Default::default()
         }
     }
 
@@ -374,6 +376,7 @@ mod tests {
                 ip_blacklist: vec![net("1.2.3.0/24")],
                 ..Default::default()
             },
+            ..Default::default()
         };
         let (result, _) = e.check(ip("1.2.3.4"), &waf, "site1");
         assert!(!result.is_blocked());

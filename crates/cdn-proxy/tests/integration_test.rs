@@ -20,6 +20,7 @@ mod waf_integration {
                 ip_blacklist: vec![IpNet::from_str("192.168.0.0/16").unwrap()],
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         // Whitelisted IP → allow
@@ -41,6 +42,7 @@ mod waf_integration {
                 ip_blacklist: vec![IpNet::from_str("192.168.0.0/16").unwrap()],
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let (result, _) = engine.check("192.168.1.100".parse().unwrap(), &waf, "site1");
@@ -58,6 +60,7 @@ mod waf_integration {
                 ip_blacklist: vec![IpNet::from_str("192.168.0.0/16").unwrap()],
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         // In both whitelist and blacklist → whitelist wins

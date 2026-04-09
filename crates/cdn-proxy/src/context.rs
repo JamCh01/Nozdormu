@@ -88,6 +88,14 @@ pub struct ProxyCtx {
     pub prefetch_manifest_type: Option<ManifestType>,
     pub prefetch_body_buffer: Vec<u8>,
     pub prefetch_buffering: bool,
+
+    // === Body inspection state ===
+    pub body_inspection_enabled: bool,
+    pub body_inspection_checked: bool,
+    pub body_bytes_received: u64,
+    pub body_max_size: u64,
+    pub body_first_chunk: Vec<u8>,
+    pub body_rejected: bool,
 }
 
 impl Default for ProxyCtx {
@@ -133,6 +141,12 @@ impl Default for ProxyCtx {
             prefetch_manifest_type: None,
             prefetch_body_buffer: Vec::new(),
             prefetch_buffering: false,
+            body_inspection_enabled: false,
+            body_inspection_checked: false,
+            body_bytes_received: 0,
+            body_max_size: 0,
+            body_first_chunk: Vec::new(),
+            body_rejected: false,
         }
     }
 }

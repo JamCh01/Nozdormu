@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (407 unit/integration tests across 7 crates)
+# Run all tests (432 unit/integration tests across 7 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -44,7 +44,7 @@ crates/
   cdn-cache/        Cache strategy, key generation, OSS/S3 storage, bulk purge (ListObjectsV2 + Multi-Object Delete)
   cdn-image/        Image optimization: params parsing, Accept negotiation, decode/resize/encode (image + fast_image_resize)
   cdn-streaming/    Video streaming: URL signing auth (Type A/B/C), MP4→HLS dynamic packaging, HLS/DASH prefetch
-  cdn-middleware/    WAF, CC rate limiting, redirects, header manipulation
+  cdn-middleware/    WAF (IP/GeoIP + body inspection), CC rate limiting, redirects, header manipulation
   cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, active health probes, admin API
 ```
 
@@ -55,7 +55,7 @@ Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-image` / `
 Detailed JSON examples with inline documentation for every config option:
 
 - **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization
-- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, full
+- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_backup_failover, waf, waf_log_mode, waf_body, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, full
 
 ## Architecture Essentials
 
@@ -74,6 +74,7 @@ Detailed JSON examples with inline documentation for every config option:
   - **Edge Auth (URL Signing)**: Type A (`/{timestamp}/{hash}/{path}`), Type B (`?auth_key={ts}-{rand}-{uid}-{hash}`), Type C (`/{hash}/{timestamp}/{path}`). HMAC-SHA256 with constant-time comparison. Validated in `request_filter` before cache lookup — unauthorized requests never touch cache. Auth tokens stripped from upstream path. Per-site `StreamingAuthConfig { auth_type, auth_key, expire_time }`.
   - **Dynamic Packaging (MP4→HLS)**: In-house MP4 atom parser (moov/trak/stbl), generates fMP4 init segments + media segments + m3u8 playlists. Triggered by `?format=hls` or `Accept: application/vnd.apple.mpegurl`. Full MP4 buffered in `response_body_filter` (same pattern as image optimization). Each HLS variant (manifest/init/segment N) gets a distinct cache key. Mutually exclusive with image optimization (image wins) and Range (packaging wins). Per-site `DynamicPackagingConfig { segment_duration, max_mp4_size }`.
   - **Smart Prefetching**: Parses HLS m3u8 and DASH mpd manifests from response bodies, extracts segment URLs, fires background `tokio::spawn` tasks to fetch next N segments from origin via reqwest and store in cache. Shadow-copies manifest body (doesn't consume — client receives at wire speed). Per-site concurrency via `Semaphore`, deduplication via `DashMap`. Per-site `PrefetchConfig { prefetch_count, concurrency_limit }`.
+- **Request body inspection**: Two-phase body checking in `waf/body.rs`. Phase 1: Content-Length pre-check in `request_filter` (early 413 before body transfer). Phase 2: `request_body_filter` buffers first 8KB for magic-bytes detection via `infer` crate (~200 file types, zero deps), enforces size limit incrementally per chunk. Supports allowed/blocked MIME type lists with wildcard matching (`image/*`), content-type mismatch detection (declared vs detected at type-family level). Per-site `BodyInspectionConfig { max_body_size, allowed_content_types, blocked_content_types, inspect_methods }`.
 
 ## Key Patterns
 
@@ -139,6 +140,7 @@ Critical production requirements:
 - Streaming auth tests use sign/validate roundtrips with HMAC-SHA256, expiry checks, tampered hash detection, cross-type validation (Type A URL fails Type C)
 - Streaming packaging tests use hand-crafted minimal MP4 byte arrays for parser tests, verify fMP4 box structure (ftyp/moov/moof/mdat), segment sample ranges, and HLS playlist generation
 - Streaming prefetch tests use manifest parsing (HLS m3u8 line-based, DASH mpd XML), URL resolution (relative/absolute), and origin URL construction
+- Body inspection tests use magic bytes (JPEG/PNG/PDF/GIF/ZIP signatures), Content-Length size checks, wildcard MIME matching, content-type mismatch detection, and edge cases (empty body, unknown type, disabled config)
 
 ### E2E Tests
 

@@ -373,6 +373,8 @@ pub struct WafConfig {
     pub mode: WafMode,
     #[serde(default)]
     pub rules: WafRules,
+    #[serde(default)]
+    pub body_inspection: BodyInspectionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -399,6 +401,47 @@ pub struct WafRules {
     pub region_blacklist: std::collections::HashMap<String, Vec<String>>,
     #[serde(default)]
     pub continent_blacklist: Vec<String>,
+}
+
+// ── Body Inspection ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BodyInspectionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum request body size in bytes. 0 = unlimited. Default 25 MB.
+    #[serde(default = "default_max_body_size")]
+    pub max_body_size: u64,
+    /// Allowed MIME types (magic-bytes verified). Empty = allow all.
+    /// Supports wildcards: "image/*", "application/pdf"
+    #[serde(default)]
+    pub allowed_content_types: Vec<String>,
+    /// Blocked MIME types (magic-bytes verified). Checked after allowed list.
+    #[serde(default)]
+    pub blocked_content_types: Vec<String>,
+    /// HTTP methods to inspect. Default: ["POST", "PUT", "PATCH"]
+    #[serde(default = "default_inspect_methods")]
+    pub inspect_methods: Vec<String>,
+}
+
+fn default_max_body_size() -> u64 {
+    26_214_400 // 25 MB
+}
+
+fn default_inspect_methods() -> Vec<String> {
+    vec!["POST".into(), "PUT".into(), "PATCH".into()]
+}
+
+impl Default for BodyInspectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_body_size: default_max_body_size(),
+            allowed_content_types: Vec::new(),
+            blocked_content_types: Vec::new(),
+            inspect_methods: default_inspect_methods(),
+        }
+    }
 }
 
 // ============================================================
