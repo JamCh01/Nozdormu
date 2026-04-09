@@ -58,6 +58,7 @@ pub struct CdnProxy {
     pub redis_pool: Arc<crate::utils::redis_pool::RedisPool>,
     pub trusted_proxies: Vec<ipnet::IpNet>,
     pub default_compression: cdn_common::CompressionConfig,
+    pub default_image_optimization: cdn_common::ImageOptimizationConfig,
 }
 
 #[async_trait]
@@ -368,6 +369,19 @@ impl ProxyHttp for CdnProxy {
             }
         }
 
+        // ── 11. Image optimization: parse query params ──
+        if let Some(ref site) = ctx.site_config {
+            if site.image_optimization.enabled {
+                let query = session.req_header().uri.query();
+                if let Some(mut params) =
+                    cdn_image::ImageParams::from_query(query, &site.image_optimization)
+                {
+                    params.clamp(&site.image_optimization);
+                    ctx.image_params = Some(params);
+                }
+            }
+        }
+
         Ok(false) // Continue to upstream_peer
     }
 
@@ -556,9 +570,88 @@ impl ProxyHttp for CdnProxy {
             _ => {}
         }
 
+        // ── Image optimization setup ──
+        // Must run BEFORE compression — image path skips compression entirely.
+        if ctx.image_params.is_some() && matches!(ctx.protocol_type, ProtocolType::Http) {
+            let content_type = upstream_response
+                .headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            // Get effective image config: site > global default
+            let img_config = ctx
+                .site_config
+                .as_ref()
+                .filter(|s| s.image_optimization.enabled)
+                .map(|s| &s.image_optimization)
+                .or_else(|| {
+                    if self.default_image_optimization.enabled {
+                        Some(&self.default_image_optimization)
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(config) = img_config {
+                if cdn_image::is_optimizable_image(content_type, config) {
+                    // Check input size limit via Content-Length
+                    let size_ok = upstream_response
+                        .headers
+                        .get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(|len| len <= config.max_input_size)
+                        .unwrap_or(true); // unknown size = try
+
+                    if size_ok {
+                        let accept = session
+                            .req_header()
+                            .headers
+                            .get("accept")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+
+                        let explicit_fmt = ctx
+                            .image_params
+                            .as_ref()
+                            .and_then(|p| p.format.as_ref());
+
+                        let (output_format, auto_negotiated) =
+                            cdn_image::negotiate_format(accept, explicit_fmt, config, content_type);
+
+                        // Set response headers for the output format
+                        upstream_response
+                            .insert_header("Content-Type", output_format.content_type())
+                            .ok();
+                        upstream_response.remove_header("Content-Length");
+
+                        if auto_negotiated {
+                            upstream_response
+                                .insert_header("Vary", "Accept")
+                                .ok();
+                            ctx.image_auto_negotiated = true;
+                        }
+
+                        ctx.image_output_format = Some(output_format);
+                        ctx.image_buffering = true;
+                    } else {
+                        // Image too large, clear params to pass through
+                        ctx.image_params = None;
+                    }
+                } else {
+                    // Not an optimizable image, clear params
+                    ctx.image_params = None;
+                }
+            } else {
+                ctx.image_params = None;
+            }
+        }
+
         // ── Response compression setup ──
         // Skip for non-HTTP protocols (WebSocket/SSE/gRPC)
-        if matches!(
+        // Skip if image buffering is active (images are already compressed)
+        if !ctx.image_buffering && matches!(
             ctx.protocol_type,
             ProtocolType::Http
         ) {
@@ -651,6 +744,86 @@ impl ProxyHttp for CdnProxy {
     where
         Self::CTX: Send + Sync,
     {
+        // ── Image optimization path (mutually exclusive with compression) ──
+        if ctx.image_buffering {
+            // Accumulate chunks into buffer
+            if let Some(data) = body.take() {
+                ctx.image_buffer.extend_from_slice(&data);
+                *body = Some(Bytes::new()); // emit empty for intermediate chunks
+            }
+            if end_of_stream {
+                ctx.image_buffering = false;
+                if let (Some(ref params), Some(ref output_format)) =
+                    (&ctx.image_params, &ctx.image_output_format)
+                {
+                    let buffer = std::mem::take(&mut ctx.image_buffer);
+
+                    let max_size = ctx
+                        .site_config
+                        .as_ref()
+                        .map(|s| s.image_optimization.max_input_size)
+                        .unwrap_or(50 * 1024 * 1024);
+
+                    if buffer.len() as u64 > max_size {
+                        log::warn!(
+                            "[Image] input too large: {} bytes, passing through",
+                            buffer.len()
+                        );
+                        *body = Some(Bytes::from(buffer));
+                    } else {
+                        let start = std::time::Instant::now();
+                        match cdn_image::process_image(&buffer, params, output_format) {
+                            Ok(processed) => {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let input_len = buffer.len();
+                                let output_len = processed.len();
+                                log::debug!(
+                                    "[Image] processed: {} -> {} bytes, format={:?}, {:.3}s",
+                                    input_len,
+                                    output_len,
+                                    output_format,
+                                    elapsed,
+                                );
+                                crate::logging::metrics::IMAGE_OPTIMIZATIONS_TOTAL
+                                    .with_label_values(&[
+                                        ctx.site_id.as_str(),
+                                        output_format.content_type(),
+                                        "success",
+                                    ])
+                                    .inc();
+                                crate::logging::metrics::IMAGE_OPTIMIZATION_DURATION
+                                    .with_label_values(&[ctx.site_id.as_str()])
+                                    .observe(elapsed);
+                                if input_len > 0 {
+                                    let ratio = output_len as f64 / input_len as f64;
+                                    crate::logging::metrics::IMAGE_OPTIMIZATION_SIZE_RATIO
+                                        .with_label_values(&[ctx.site_id.as_str()])
+                                        .observe(ratio);
+                                }
+                                *body = Some(Bytes::from(processed));
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "[Image] processing failed: {}, passing through",
+                                    e
+                                );
+                                crate::logging::metrics::IMAGE_OPTIMIZATIONS_TOTAL
+                                    .with_label_values(&[
+                                        ctx.site_id.as_str(),
+                                        output_format.content_type(),
+                                        "error",
+                                    ])
+                                    .inc();
+                                *body = Some(Bytes::from(buffer));
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        // ── Compression path ──
         if let Some(ref mut encoder) = ctx.compressor {
             if let Some(data) = body.take() {
                 let compressed = encoder.write_chunk(&data);

@@ -61,6 +61,13 @@ pub struct ProxyCtx {
     // === Compression state ===
     pub compressor: Option<crate::compression::Encoder>,
     pub compression_algorithm: Option<CompressionAlgorithm>,
+
+    // === Image optimization state ===
+    pub image_params: Option<cdn_image::ImageParams>,
+    pub image_output_format: Option<cdn_common::ImageFormat>,
+    pub image_auto_negotiated: bool,
+    pub image_buffer: Vec<u8>,
+    pub image_buffering: bool,
 }
 
 impl Default for ProxyCtx {
@@ -89,6 +96,11 @@ impl Default for ProxyCtx {
             response_body_size: 0,
             compressor: None,
             compression_algorithm: None,
+            image_params: None,
+            image_output_format: None,
+            image_auto_negotiated: false,
+            image_buffer: Vec::new(),
+            image_buffering: false,
         }
     }
 }

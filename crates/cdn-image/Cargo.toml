@@ -1,0 +1,12 @@
+[package]
+name = "cdn-image"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cdn-common = { workspace = true }
+image = { workspace = true }
+fast_image_resize = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }

@@ -296,6 +296,7 @@ fn main() {
         redis_pool,
         trusted_proxies: node_config.security.trusted_proxies.clone(),
         default_compression: node_config.compression.clone(),
+        default_image_optimization: node_config.image_optimization.clone(),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);

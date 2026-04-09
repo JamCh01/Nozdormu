@@ -144,6 +144,37 @@ pub static CACHE_PURGE_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Image Optimization ──
+
+pub static IMAGE_OPTIMIZATIONS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_image_optimizations_total",
+        "Total image optimization operations",
+        &["site_id", "output_format", "result"]
+    )
+    .unwrap()
+});
+
+pub static IMAGE_OPTIMIZATION_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_image_optimization_duration_seconds",
+        "Image optimization processing duration",
+        &["site_id"],
+        vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    )
+    .unwrap()
+});
+
+pub static IMAGE_OPTIMIZATION_SIZE_RATIO: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_image_optimization_size_ratio",
+        "Image output/input size ratio",
+        &["site_id"],
+        vec![0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

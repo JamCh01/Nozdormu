@@ -1,4 +1,4 @@
-use cdn_common::CompressionConfig;
+use cdn_common::{CompressionConfig, ImageOptimizationConfig};
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -62,6 +62,7 @@ pub struct NodeConfig {
     pub log: LogConfig,
     pub paths: PathsConfig,
     pub compression: CompressionConfig,
+    pub image_optimization: ImageOptimizationConfig,
 }
 
 impl NodeConfig {
@@ -78,6 +79,7 @@ impl NodeConfig {
             log: LogConfig::from_env(),
             paths: PathsConfig::from_env(),
             compression: compression_from_env(),
+            image_optimization: image_optimization_from_env(),
         }
     }
 
@@ -102,6 +104,9 @@ impl NodeConfig {
             log: LogConfig::from_etcd_with_env_override(global.logging.as_ref()),
             compression: compression_from_etcd_with_env_override(
                 global.compression.as_ref(),
+            ),
+            image_optimization: image_optimization_from_etcd_with_env_override(
+                global.image_optimization.as_ref(),
             ),
         }
     }
@@ -130,6 +135,9 @@ impl NodeConfig {
             log: LogConfig::from_etcd_with_env_override(global.logging.as_ref()),
             compression: compression_from_etcd_with_env_override(
                 global.compression.as_ref(),
+            ),
+            image_optimization: image_optimization_from_etcd_with_env_override(
+                global.image_optimization.as_ref(),
             ),
         }
     }
@@ -1178,5 +1186,64 @@ fn compression_from_etcd_with_env_override(base: Option<&CompressionConfig>) -> 
             d.min_size
         },
         compressible_types: d.compressible_types,
+    }
+}
+
+// ============================================================
+// Image Optimization
+// ============================================================
+
+fn image_optimization_from_env() -> ImageOptimizationConfig {
+    let mut config = ImageOptimizationConfig::default();
+    if env_is_set("CDN_IMAGE_ENABLED") {
+        config.enabled = env_bool("CDN_IMAGE_ENABLED", false);
+    }
+    if env_is_set("CDN_IMAGE_DEFAULT_QUALITY") {
+        config.default_quality = env_u64("CDN_IMAGE_DEFAULT_QUALITY", 80) as u32;
+    }
+    if env_is_set("CDN_IMAGE_MAX_WIDTH") {
+        config.max_width = env_u64("CDN_IMAGE_MAX_WIDTH", 4096) as u32;
+    }
+    if env_is_set("CDN_IMAGE_MAX_HEIGHT") {
+        config.max_height = env_u64("CDN_IMAGE_MAX_HEIGHT", 4096) as u32;
+    }
+    if env_is_set("CDN_IMAGE_MAX_INPUT_SIZE") {
+        config.max_input_size = env_u64("CDN_IMAGE_MAX_INPUT_SIZE", 50 * 1024 * 1024);
+    }
+    config
+}
+
+fn image_optimization_from_etcd_with_env_override(
+    base: Option<&ImageOptimizationConfig>,
+) -> ImageOptimizationConfig {
+    let d = base.cloned().unwrap_or_default();
+    ImageOptimizationConfig {
+        enabled: if env_is_set("CDN_IMAGE_ENABLED") {
+            env_bool("CDN_IMAGE_ENABLED", false)
+        } else {
+            d.enabled
+        },
+        formats: d.formats,
+        default_quality: if env_is_set("CDN_IMAGE_DEFAULT_QUALITY") {
+            env_u64("CDN_IMAGE_DEFAULT_QUALITY", 80) as u32
+        } else {
+            d.default_quality
+        },
+        max_width: if env_is_set("CDN_IMAGE_MAX_WIDTH") {
+            env_u64("CDN_IMAGE_MAX_WIDTH", 4096) as u32
+        } else {
+            d.max_width
+        },
+        max_height: if env_is_set("CDN_IMAGE_MAX_HEIGHT") {
+            env_u64("CDN_IMAGE_MAX_HEIGHT", 4096) as u32
+        } else {
+            d.max_height
+        },
+        max_input_size: if env_is_set("CDN_IMAGE_MAX_INPUT_SIZE") {
+            env_u64("CDN_IMAGE_MAX_INPUT_SIZE", 50 * 1024 * 1024)
+        } else {
+            d.max_input_size
+        },
+        optimizable_types: d.optimizable_types,
     }
 }

@@ -321,6 +321,10 @@ pub async fn load_global_config(etcd_config: &EtcdConfig) -> GlobalConfig {
                 Ok(v) => global.compression = Some(v),
                 Err(e) => log::warn!("[etcd] failed to parse global/compression: {}", e),
             },
+            "image_optimization" => match serde_json::from_slice(value) {
+                Ok(v) => global.image_optimization = Some(v),
+                Err(e) => log::warn!("[etcd] failed to parse global/image_optimization: {}", e),
+            },
             other => {
                 log::debug!("[etcd] ignoring unknown global key: {}", other);
             }
@@ -336,13 +340,14 @@ pub async fn load_global_config(etcd_config: &EtcdConfig) -> GlobalConfig {
         global.ssl.is_some(),
         global.logging.is_some(),
         global.compression.is_some(),
+        global.image_optimization.is_some(),
     ]
     .iter()
     .filter(|&&x| x)
     .count();
 
     log::info!(
-        "[etcd] loaded {}/8 global config sections from etcd",
+        "[etcd] loaded {}/9 global config sections from etcd",
         loaded_count
     );
     global

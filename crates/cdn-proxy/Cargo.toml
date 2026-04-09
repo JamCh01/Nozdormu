@@ -16,6 +16,7 @@ path = "src/lib.rs"
 cdn-common = { workspace = true }
 cdn-config = { workspace = true }
 cdn-cache = { workspace = true }
+cdn-image = { workspace = true }
 cdn-middleware = { workspace = true }
 pingora = { workspace = true }
 async-trait = { workspace = true }

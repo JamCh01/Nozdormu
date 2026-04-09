@@ -1,5 +1,5 @@
 use crate::node_config::*;
-use cdn_common::CompressionConfig;
+use cdn_common::{CompressionConfig, ImageOptimizationConfig};
 use serde::{Deserialize, Serialize};
 
 /// Cluster-shared configuration loaded from etcd `{prefix}/global/*` keys.
@@ -17,6 +17,7 @@ pub struct GlobalConfig {
     pub ssl: Option<SslAcmeConfig>,
     pub logging: Option<LoggingGlobalConfig>,
     pub compression: Option<CompressionConfig>,
+    pub image_optimization: Option<ImageOptimizationConfig>,
 }
 
 /// Subset of logging config that is cluster-shared.

@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (273 unit/integration tests across 4 crates)
+# Run all tests (315 unit/integration tests across 5 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -42,11 +42,12 @@ crates/
   cdn-common/       Shared types (SiteConfig, CdnError, RedisOps trait)
   cdn-config/       Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
   cdn-cache/        Cache strategy, key generation, OSS/S3 storage, bulk purge (ListObjectsV2 + Multi-Object Delete)
+  cdn-image/        Image optimization: params parsing, Accept negotiation, decode/resize/encode (image + fast_image_resize)
   cdn-middleware/    WAF, CC rate limiting, redirects, header manipulation
   cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, active health probes, admin API
 ```
 
-Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-middleware` ← `cdn-proxy`
+Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-image` / `cdn-middleware` ← `cdn-proxy`
 
 ## Configuration Examples
 
@@ -66,6 +67,7 @@ Detailed JSON examples with inline documentation for every config option:
 - **Cache purge**: Admin API supports exact URL purge (synchronous, regenerates cache key from request components) and site-wide purge (async background task). Site purge uses Redis SCAN (cursor-based, non-blocking) to discover cache keys, then S3 Multi-Object Delete for bulk body removal. Falls back to S3 ListObjectsV2 when Redis is unavailable. `PurgeTaskTracker` (DashMap) tracks background task progress with auto-eviction.
 - **Thread-local caches**: Regex patterns (LRU, cap 256), WAF IP sets (keyed by version counter to avoid ABA).
 - **Response compression**: gzip/Brotli/Zstd via `response_body_filter` streaming. Negotiated per-request from `Accept-Encoding`. Two-tier config: per-site override + global default. Skipped for WebSocket/SSE/gRPC and non-compressible MIME types.
+- **Image optimization**: On-the-fly resize/crop, format conversion (JPEG/PNG/WebP/AVIF), quality adjustment via query params (`?w=200&h=150&fit=cover&fmt=webp&q=80&dpr=2`). Auto-negotiates output format from `Accept` header (AVIF > WebP > original). Full-body buffering in `response_body_filter` (images require complete data before processing). Image path and compression path are mutually exclusive. Uses `image` crate for decode/encode + `fast_image_resize` for SIMD-optimized resize. Graceful degradation: serves original image on processing failure. Cache key correctness is automatic (query params already included in MD5 hash).
 
 ## Key Patterns
 
@@ -126,6 +128,7 @@ Critical production requirements:
 - Cache tests use `CacheConfig::default()` with rule overrides
 - Health probe tests use `HealthChecker` directly with `ProbeState` threshold logic (no network needed)
 - Purge tests use `PurgeTaskTracker` directly and serde deserialization (no Redis/OSS needed)
+- Image tests use in-memory generated JPEG/PNG test images, verify decode/resize/encode round-trips and dimension correctness
 
 ### E2E Tests
 

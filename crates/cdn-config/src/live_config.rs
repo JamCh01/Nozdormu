@@ -157,6 +157,7 @@ mod tests {
             url_redirect_rules: Vec::new(),
             timeouts: TimeoutsConfig::default(),
             compression: CompressionConfig::default(),
+            image_optimization: ImageOptimizationConfig::default(),
         }
     }
 

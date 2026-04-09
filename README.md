@@ -8,12 +8,13 @@ High-performance CDN reverse proxy built on [Pingora](https://github.com/cloudfl
 - **WAF** -- IP/CIDR whitelist/blacklist (prefix trie O(log n)), GeoIP country/region/ASN filtering, fail-closed country whitelist
 - **Rate Limiting (CC)** -- Hybrid local+Redis counters, JS challenge (HMAC-SHA256), per-path rules with longest-prefix matching
 - **Caching** -- Dual-backend: Redis metadata + S3/OSS body storage, rule-based TTL (path/extension/regex), Cache-Control compliance, cache purge API (exact URL + site-wide)
+- **Image Optimization** -- On-the-fly resize/crop (5 fit modes), format conversion (JPEG/PNG/WebP/AVIF), quality adjustment, auto-format negotiation via `Accept` header, DPR-aware adaptive sizing; pure Rust (`image` + `fast_image_resize`)
 - **Multi-Protocol** -- HTTP, WebSocket, SSE, gRPC (native + gRPC-Web) with per-protocol timeout and header handling
 - **Load Balancing** -- Weighted round-robin, IP hash, random; active health checks (HTTP/TCP probes) + passive health tracking with automatic failover to backup origins
 - **SSL/TLS** -- Multi-provider ACME (Let's Encrypt, ZeroSSL, Buypass, Google), automatic renewal, distributed locking
 - **Redirects** -- Three-tier engine: domain redirect, protocol enforcement (HTTP/HTTPS), URL rules (exact/prefix/regex/domain)
 - **Header Manipulation** -- Request/response header rules with variable substitution (`${client_ip}`, `${host}`, `${cache_status}`, etc.)
-- **Observability** -- Prometheus metrics (request/upstream/health check/cache purge counters, duration histograms), Redis Streams request logging, per-request ID tracking
+- **Observability** -- Prometheus metrics (request/upstream/health check/cache purge/image optimization counters, duration histograms), Redis Streams request logging, per-request ID tracking
 - **Compression** -- gzip, Brotli, Zstandard with `Accept-Encoding` negotiation; per-site config with global default; auto-skip for WebSocket/SSE/gRPC and non-compressible types
 - **Admin API** -- Config reload, health status and manual override, CC state inspection, cache purge (exact URL + site-wide with background tasks); Bearer token auth with constant-time comparison
 
@@ -24,6 +25,7 @@ crates/
   cdn-common        Shared types, error handling, RedisOps trait
   cdn-config        Node config, GlobalConfig (etcd), LiveConfig (ArcSwap), etcd watcher
   cdn-cache         Cache strategy, key generation, S3/OSS client (AWS Sig v4), bulk purge
+  cdn-image         Image optimization: resize/crop, format conversion, quality, Accept negotiation
   cdn-middleware     WAF engine, CC engine, redirect engine, header rules
   cdn-proxy          Main binary: Pingora proxy, balancer, DNS, SSL, active health probes, admin API
 ```
@@ -39,10 +41,13 @@ Client -> Pingora Listener
   -> CC check (ban cache -> challenge verify -> counter -> threshold)
   -> Redirect check (domain -> protocol -> URL rules)
   -> Protocol detection (gRPC > WebSocket > SSE > HTTP)
+  -> Image param parsing (w/h/fit/fmt/q/dpr from query string)
   -> Cache lookup (key generation -> Redis meta -> OSS body)
   -> Load balancer (health filter -> algorithm -> DNS resolve -> HttpPeer)
   -> Upstream request (header injection, protocol-specific headers)
   -> Response filter (header rules, cache write, security headers)
+  -> Image optimization (detect image type, negotiate format, buffer+process)
+  -> Compression (gzip/Brotli/Zstd, skipped for images)
   -> Logging (Prometheus metrics, Redis Streams, passive health update)
 ```
 
@@ -113,6 +118,13 @@ curl -X POST http://localhost:8080/cache/purge \
 curl -X POST http://localhost:8080/cache/purge \
   -H "Content-Type: application/json" \
   -d '{"type":"site","site_id":"example"}'
+
+# Image optimization (resize + auto format negotiation)
+curl -H "Accept: image/avif,image/webp,*/*" \
+  "http://localhost:6188/photo.jpg?w=200&h=150&fit=cover&q=80" -o optimized.avif
+
+# Image optimization (explicit format + DPR)
+curl "http://localhost:6188/photo.jpg?w=400&fmt=webp&q=75&dpr=2" -o optimized.webp
 ```
 
 ## Configuration
@@ -144,6 +156,7 @@ Loaded from etcd at startup under `{prefix}/global/*`. Shared across all nodes. 
 | `{prefix}/global/ssl` | ACME environment, email, providers, renewal days |
 | `{prefix}/global/logging` | Redis log push, stream max length |
 | `{prefix}/global/compression` | Compression algorithms, level, min size, MIME types |
+| `{prefix}/global/image_optimization` | Image formats, quality, max dimensions, optimizable types |
 
 Example: set Redis config for the entire cluster:
 
@@ -229,6 +242,15 @@ Sites are stored as JSON in etcd at `{prefix}/sites/{site_id}`. Example:
     "level": 6,
     "min_size": 256,
     "compressible_types": ["text/*", "application/json", "application/javascript", "image/svg+xml"]
+  },
+  "image_optimization": {
+    "enabled": true,
+    "formats": ["avif", "webp"],
+    "default_quality": 80,
+    "max_width": 4096,
+    "max_height": 4096,
+    "max_input_size": 52428800,
+    "optimizable_types": ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/tiff"]
   }
 }
 ```
@@ -252,7 +274,7 @@ See [`docs/global/`](docs/global/) for all global config examples and [`docs/sit
 ## Development
 
 ```bash
-# Run unit/integration tests (273 tests)
+# Run unit/integration tests (315 tests)
 cargo test
 
 # Lint

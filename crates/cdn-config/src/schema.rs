@@ -92,6 +92,40 @@ pub fn validate_site_config(config: &SiteConfig) -> Vec<ValidationError> {
         });
     }
 
+    // image_optimization
+    if config.image_optimization.enabled {
+        if config.image_optimization.default_quality == 0
+            || config.image_optimization.default_quality > 100
+        {
+            errors.push(ValidationError {
+                path: "image_optimization.default_quality".to_string(),
+                message: "must be between 1 and 100".to_string(),
+            });
+        }
+        if config.image_optimization.max_width == 0
+            || config.image_optimization.max_width > 16384
+        {
+            errors.push(ValidationError {
+                path: "image_optimization.max_width".to_string(),
+                message: "must be between 1 and 16384".to_string(),
+            });
+        }
+        if config.image_optimization.max_height == 0
+            || config.image_optimization.max_height > 16384
+        {
+            errors.push(ValidationError {
+                path: "image_optimization.max_height".to_string(),
+                message: "must be between 1 and 16384".to_string(),
+            });
+        }
+        if config.image_optimization.max_input_size == 0 {
+            errors.push(ValidationError {
+                path: "image_optimization.max_input_size".to_string(),
+                message: "must be greater than 0".to_string(),
+            });
+        }
+    }
+
     errors
 }
 

@@ -5,6 +5,7 @@ members = [
     "crates/cdn-config",
     "crates/cdn-cache",
     "crates/cdn-middleware",
+    "crates/cdn-image",
     "crates/cdn-proxy",
 ]
 
@@ -84,8 +85,13 @@ flate2 = "1"
 brotli = "3.5"
 zstd = "0.13"
 
+# Image processing
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "avif", "bmp", "tiff"] }
+fast_image_resize = "5"
+
 # Internal crates
 cdn-common = { path = "crates/cdn-common" }
 cdn-config = { path = "crates/cdn-config" }
 cdn-cache = { path = "crates/cdn-cache" }
+cdn-image = { path = "crates/cdn-image" }
 cdn-middleware = { path = "crates/cdn-middleware" }

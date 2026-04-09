@@ -39,6 +39,8 @@ pub struct SiteConfig {
     pub timeouts: TimeoutsConfig,
     #[serde(default)]
     pub compression: CompressionConfig,
+    #[serde(default)]
+    pub image_optimization: ImageOptimizationConfig,
 }
 
 impl SiteConfig {
@@ -675,5 +677,119 @@ fn default_compressible_types() -> Vec<String> {
         "application/atom+xml".to_string(),
         "application/wasm".to_string(),
         "image/svg+xml".to_string(),
+    ]
+}
+
+// ============================================================
+// Image Optimization Configuration
+// ============================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFormat {
+    Avif,
+    #[serde(alias = "webp")]
+    WebP,
+    Jpeg,
+    Png,
+}
+
+impl ImageFormat {
+    /// MIME content type for this format.
+    pub fn content_type(&self) -> &'static str {
+        match self {
+            ImageFormat::Avif => "image/avif",
+            ImageFormat::WebP => "image/webp",
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Png => "image/png",
+        }
+    }
+
+    /// Token used in Accept header matching.
+    pub fn accept_token(&self) -> &'static str {
+        match self {
+            ImageFormat::Avif => "image/avif",
+            ImageFormat::WebP => "image/webp",
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Png => "image/png",
+        }
+    }
+
+    /// Parse from a string token (query param value).
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token.trim().to_lowercase().as_str() {
+            "avif" => Some(ImageFormat::Avif),
+            "webp" => Some(ImageFormat::WebP),
+            "jpeg" | "jpg" => Some(ImageFormat::Jpeg),
+            "png" => Some(ImageFormat::Png),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeFit {
+    /// Scale to fit within target dimensions, preserving aspect ratio.
+    #[default]
+    Contain,
+    /// Scale to cover target dimensions, crop center.
+    Cover,
+    /// Stretch to exact target dimensions (ignores aspect ratio).
+    Fill,
+    /// Like Contain but never enlarges.
+    Inside,
+    /// Like Cover but never enlarges.
+    Outside,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageOptimizationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_image_formats")]
+    pub formats: Vec<ImageFormat>,
+    #[serde(default = "default_image_quality")]
+    pub default_quality: u32,
+    #[serde(default = "default_image_max_width")]
+    pub max_width: u32,
+    #[serde(default = "default_image_max_height")]
+    pub max_height: u32,
+    #[serde(default = "default_image_max_input_size")]
+    pub max_input_size: u64,
+    #[serde(default = "default_image_optimizable_types")]
+    pub optimizable_types: Vec<String>,
+}
+
+impl Default for ImageOptimizationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            formats: default_image_formats(),
+            default_quality: default_image_quality(),
+            max_width: default_image_max_width(),
+            max_height: default_image_max_height(),
+            max_input_size: default_image_max_input_size(),
+            optimizable_types: default_image_optimizable_types(),
+        }
+    }
+}
+
+fn default_image_formats() -> Vec<ImageFormat> {
+    vec![ImageFormat::Avif, ImageFormat::WebP]
+}
+
+fn default_image_quality() -> u32 { 80 }
+fn default_image_max_width() -> u32 { 4096 }
+fn default_image_max_height() -> u32 { 4096 }
+fn default_image_max_input_size() -> u64 { 50 * 1024 * 1024 } // 50 MB
+
+fn default_image_optimizable_types() -> Vec<String> {
+    vec![
+        "image/jpeg".to_string(),
+        "image/png".to_string(),
+        "image/gif".to_string(),
+        "image/bmp".to_string(),
+        "image/tiff".to_string(),
     ]
 }
