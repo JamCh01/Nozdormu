@@ -331,7 +331,7 @@ cargo watch -x "run -p cdn-proxy -- -c config/default.yaml"
 # 启动基础设施 + 后端 + 代理
 bash tests/e2e/setup.sh
 
-# 运行全部 79 个测试（WAF、CC、缓存、负载均衡、压缩、重定向、头部、管理 API）
+# 运行全部 79 个测试（WAF、CC、缓存、负载均衡、压缩、重定向、协议、头部、管理 API、跨功能）
 bash tests/e2e/run_tests.sh
 
 # 运行特定测试组

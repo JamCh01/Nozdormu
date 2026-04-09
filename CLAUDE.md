@@ -152,7 +152,7 @@ tests/e2e/
   run_tests.sh          79 curl-based tests across 21 groups (can filter by group name)
   teardown.sh           Stop everything (--all to include docker-compose)
   lib.sh                Test framework (assertions, colors, counters)
-  backends/server.py    Python HTTP server with 14 test endpoints
+  backends/server.py    Python HTTP server with 19 test endpoints
   configs/              15 site JSON configs + etcd loader scripts
 ```
 
