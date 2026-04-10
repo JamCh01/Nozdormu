@@ -33,7 +33,6 @@ redis = { workspace = true }
 moka = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
-axum = { workspace = true }
 instant-acme = { workspace = true }
 x509-parser = { workspace = true }
 hickory-resolver = { workspace = true }
@@ -50,4 +49,4 @@ zstd = { workspace = true }
 bytes = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
-jemallocator = "0.5"
+jemallocator = { workspace = true }

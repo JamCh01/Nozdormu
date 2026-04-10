@@ -16,11 +16,24 @@ edition = "2021"
 rust-version = "1.84"
 publish = false
 
+[workspace.lints.clippy]
+too_many_arguments = { level = "allow", priority = 1 }
+
+# ── Release profile: optimized for production binary size and speed ──
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3
+panic = "abort"
+
+# ── Dev profile: fast incremental builds, optimize heavy deps ──
+[profile.dev.package."*"]
+opt-level = 1
+
 [workspace.dependencies]
 # Pingora
 pingora = { version = "0.8", features = ["lb", "cache", "openssl", "proxy"] }
-pingora-limits = "0.8"
-pingora-timeout = "0.8"
 
 # Async
 async-trait = "0.1"
@@ -76,9 +89,6 @@ md-5 = "0.10"
 reqwest = { version = "0.12", features = ["rustls-tls"] }
 quick-xml = "0.37"
 
-# Admin API
-axum = { version = "0.7", features = ["tokio"] }
-
 # DNS
 hickory-resolver = "0.24"
 
@@ -90,6 +100,9 @@ zstd = "0.13"
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "avif", "bmp", "tiff"] }
 fast_image_resize = "5"
+
+# Allocator
+jemallocator = "0.5"
 
 # Internal crates
 cdn-common = { path = "crates/cdn-common" }
