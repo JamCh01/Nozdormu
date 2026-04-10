@@ -40,7 +40,8 @@ crates/
 
 ```
 客户端 -> Pingora 监听器
-  -> 健康检查/ACME/管理端点（短路返回）
+  -> 健康检查/ACME（短路返回）
+  -> 管理 API（/_admin/ 路径，Bearer Token 认证，短路返回）
   -> 站点路由（域名 -> SiteConfig，精确/通配符匹配）
   -> 客户端 IP 提取（XFF 防伪造，可配置信任代理）
   -> WAF 检查（IP 前缀树 -> GeoIP -> ASN -> 国家 -> 地区）
@@ -313,7 +314,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 ## 开发
 
 ```bash
-# 运行单元/集成测试（431 个测试）
+# 运行单元/集成测试（432 个测试）
 cargo test
 
 # 代码检查
