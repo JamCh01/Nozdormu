@@ -76,6 +76,7 @@ Detailed JSON examples with inline documentation for every config option:
   - **Dynamic Packaging (MP4→HLS)**: In-house MP4 atom parser (moov/trak/stbl), generates fMP4 init segments + media segments + m3u8 playlists. Triggered by `?format=hls` or `Accept: application/vnd.apple.mpegurl`. Full MP4 buffered in `response_body_filter` (same pattern as image optimization). Each HLS variant (manifest/init/segment N) gets a distinct cache key. Mutually exclusive with image optimization (image wins) and Range (packaging wins). Per-site `DynamicPackagingConfig { segment_duration, max_mp4_size }`. Invalid sample offsets are handled gracefully (size zeroed in trun to maintain ISO BMFF consistency).
   - **Smart Prefetching**: Parses HLS m3u8 and DASH mpd manifests from response bodies, extracts segment URLs, fires background `tokio::spawn` tasks to fetch next N segments from origin via reqwest and store in cache. Shadow-copies manifest body (doesn't consume — client receives at wire speed). Per-site concurrency via `Semaphore`, deduplication via `DashMap` `entry()` API (atomic check-and-insert). Response body capped at 256 MB to prevent OOM from malicious origins. Per-site `PrefetchConfig { prefetch_count, concurrency_limit }`.
 - **Request body inspection**: Two-phase body checking in `waf/body.rs`. Phase 1: Content-Length pre-check in `request_filter` (early 413 before body transfer). Phase 2: `request_body_filter` buffers first 8KB for magic-bytes detection via `infer` crate (~200 file types, zero deps), enforces size limit incrementally per chunk. Supports allowed/blocked MIME type lists with wildcard matching (`image/*`), content-type mismatch detection (declared vs detected at type-family level). Per-site `BodyInspectionConfig { max_body_size, allowed_content_types, blocked_content_types, inspect_methods }`.
+- **TLS listener & 0-RTT Early Data**: Optional downstream TLS listener via `tls_listen` config field. Uses Pingora's `TlsSettings::with_callbacks()` + `TlsAccept` trait for dynamic certificate provisioning — `CdnTlsAccept` in `ssl/tls_accept.rs` looks up certs via `CertManager` (SNI → exact → wildcard → default). TLS 1.3 0-RTT enabled via `set_max_early_data()` on `SslAcceptorBuilder` when `early_data: true`. After handshake, `SSL_get_early_data_status()` (FFI) stores result in `SslDigest.extension` as `TlsHandshakeData`. In `request_filter`, non-idempotent methods (POST/PUT/DELETE/PATCH) on 0-RTT connections are rejected with 425 Too Early. Idempotent 0-RTT requests get `Early-Data: 1` upstream header per RFC 8470. Prometheus counter `cdn_early_data_requests_total` tracks accepted/rejected. Both TCP and TLS listeners share the same `CdnProxy` instance.
 
 ## Key Patterns
 
@@ -100,7 +101,7 @@ cargo run -p cdn-proxy -- -c config/default.yaml \
 docker compose --profile dev up
 ```
 
-The proxy listens on `0.0.0.0:6188` (HTTP) and metrics on `0.0.0.0:6190` (Prometheus).
+The proxy listens on `0.0.0.0:6188` (HTTP) and metrics on `0.0.0.0:6190` (Prometheus). Optional TLS listener on `0.0.0.0:6189` (HTTPS) when `tls_listen` is configured in `config/default.yaml` with certificates in `--cert-path`.
 Admin API is served on the proxy port under `/_admin/` prefix (Bearer token auth required, configured via etcd `{prefix}/global/security` `admin_token`).
 
 ## Configuration

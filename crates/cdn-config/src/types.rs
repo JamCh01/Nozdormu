@@ -9,6 +9,16 @@ pub struct CdnConfig {
     pub health_check: HealthCheckConfig,
     #[serde(default = "default_load_balancing")]
     pub load_balancing: LoadBalancingAlgorithm,
+
+    /// TLS listener address (e.g., "0.0.0.0:6189"). None = TLS disabled.
+    #[serde(default)]
+    pub tls_listen: Option<String>,
+    /// Enable TLS 1.3 0-RTT early data. Default false.
+    #[serde(default)]
+    pub early_data: bool,
+    /// Max early data size in bytes. Default 16384.
+    #[serde(default = "default_max_early_data")]
+    pub max_early_data: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,4 +69,8 @@ fn default_interval() -> u64 {
 
 fn default_load_balancing() -> LoadBalancingAlgorithm {
     LoadBalancingAlgorithm::default()
+}
+
+fn default_max_early_data() -> u32 {
+    16384
 }

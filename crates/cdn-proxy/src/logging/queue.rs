@@ -82,6 +82,7 @@ pub struct LogEntry {
     pub packaging_request: bool,
     pub auth_validated: bool,
     pub body_rejected: bool,
+    pub early_data: bool,
     pub node_id: String,
 }
 

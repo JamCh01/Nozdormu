@@ -53,6 +53,9 @@ pub struct ProxyCtx {
     pub uri: String,
     pub scheme: String,
 
+    /// Whether this request was received via TLS 1.3 early data (0-RTT)
+    pub is_early_data: bool,
+
     // === Set in upstream_peer (balancer phase) ===
     pub selected_origin: Option<OriginConfig>,
     pub balancer_tried: u32,
@@ -122,6 +125,7 @@ impl Default for ProxyCtx {
             host: String::new(),
             uri: String::new(),
             scheme: String::new(),
+            is_early_data: false,
             selected_origin: None,
             balancer_tried: 0,
             response_body: None,

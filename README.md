@@ -18,10 +18,10 @@
   - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，原子去重，响应体大小限制（256MB），提升命中率
 - **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
 - **负载均衡** -- 加权轮询、IP 哈希、随机；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
-- **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），自动续期，分布式锁
+- **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），自动续期，分布式锁；下游 TLS 监听器（动态证书选择，SNI 精确/通配符/默认回退），TLS 1.3 0-RTT Early Data（非幂等方法自动拒绝 425，上游 `Early-Data: 1` 头部 RFC 8470）
 - **重定向** -- 三层引擎：域名重定向、协议强制（HTTP/HTTPS）、URL 规则（精确/前缀/正则/域名）
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
-- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
+- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT 计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
 - **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
 
@@ -41,11 +41,12 @@ crates/
 ### 请求流程
 
 ```
-客户端 -> Pingora 监听器
+客户端 -> Pingora 监听器（HTTP + 可选 TLS，动态证书选择，0-RTT Early Data）
   -> 健康检查/ACME（短路返回）
   -> 管理 API（/_admin/ 路径，Bearer Token 认证，短路返回）
   -> 站点路由（域名 -> SiteConfig，精确/通配符匹配）
   -> 客户端 IP 提取（XFF 防伪造，可配置信任代理）
+  -> 0-RTT 重放保护（非幂等方法返回 425 Too Early）
   -> WAF 检查（IP 前缀树 -> GeoIP -> ASN -> 国家 -> 地区）
   -> 请求体预检（Content-Length 大小限制，超限直接 413）
   -> CC 检查（封禁缓存 -> 挑战验证 -> 计数器 -> 阈值）
@@ -317,6 +318,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 | 端口 | 服务 |
 |------|------|
 | 6188 | HTTP 代理 + 管理 API（`/_admin/` 路径，Bearer Token 认证） |
+| 6189 | HTTPS/TLS 代理（可选，需配置 `tls_listen` + 证书） |
 | 6190 | Prometheus 指标 |
 
 ## 开发
@@ -360,7 +362,7 @@ bash tests/e2e/teardown.sh
 项目使用 GitHub Actions 进行持续集成和发布：
 
 - **CI**（`push`/`PR` 到 `main`）：check → clippy → fmt → test → build release
-- **Release**（推送 `v*` tag）：构建 x86_64/aarch64 Linux 二进制（glibc + musl 静态链接），创建 GitHub Release
+- **Release**（推送 `v*` tag）：构建 x86_64 Linux 二进制（glibc + musl 静态链接），创建 GitHub Release
 
 ```bash
 # 发布新版本

@@ -46,6 +46,7 @@ flate2 = { workspace = true }
 brotli = { workspace = true }
 zstd = { workspace = true }
 bytes = { workspace = true }
+foreign-types-shared = "0.1"
 
 [target.'cfg(not(windows))'.dependencies]
 jemallocator = { workspace = true }

@@ -232,6 +232,17 @@ pub static BODY_INSPECTION_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── TLS Early Data (0-RTT) ──
+
+pub static EARLY_DATA_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_early_data_requests_total",
+        "Total TLS 1.3 0-RTT early data requests",
+        &["site_id", "result"] // result: "accepted", "rejected_method"
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

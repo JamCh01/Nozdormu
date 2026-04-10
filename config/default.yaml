@@ -11,6 +11,11 @@ cdn:
   # Listener address
   listen: "0.0.0.0:6188"
 
+  # TLS listener address (optional, requires certs in --cert-path)
+  # tls_listen: "0.0.0.0:6189"
+  # early_data: false
+  # max_early_data: 16384
+
   # Prometheus metrics endpoint
   metrics_listen: "0.0.0.0:6190"
 

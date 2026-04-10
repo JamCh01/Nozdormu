@@ -17,6 +17,9 @@ use cdn_proxy::health_probe::ActiveHealthCheckService;
 use cdn_proxy::logging::queue::init_log_queue;
 use cdn_proxy::proxy::CdnProxy;
 use cdn_proxy::ssl::challenge::ChallengeStore;
+use cdn_proxy::ssl::manager::CertManager;
+use cdn_proxy::ssl::storage::CertStorage;
+use cdn_proxy::ssl::tls_accept::CdnTlsAccept;
 use cdn_proxy::utils::redis_pool::RedisPool;
 use clap::Parser;
 use pingora::prelude::*;
@@ -309,6 +312,34 @@ fn main() {
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
     proxy_service.add_tcp(&cdn_config.listen);
     log::info!("proxy listening on {}", cdn_config.listen);
+
+    // ── TLS listener (optional) ──
+    if let Some(ref tls_addr) = cdn_config.tls_listen {
+        let cert_storage =
+            Arc::new(CertStorage::new(Path::new(&node_config.paths.certs)));
+        cert_storage.load_all();
+        let cert_manager = Arc::new(CertManager::new(cert_storage));
+
+        let tls_accept = CdnTlsAccept::new(Arc::clone(&cert_manager));
+        let callbacks: pingora::listeners::TlsAcceptCallbacks = Box::new(tls_accept);
+        let mut tls_settings =
+            pingora::listeners::tls::TlsSettings::with_callbacks(callbacks)
+                .expect("failed to create TLS settings");
+        tls_settings.enable_h2();
+
+        if cdn_config.early_data {
+            tls_settings
+                .set_max_early_data(cdn_config.max_early_data)
+                .expect("failed to set max_early_data");
+            log::info!(
+                "[TLS] 0-RTT early data enabled, max_early_data={}",
+                cdn_config.max_early_data
+            );
+        }
+
+        proxy_service.add_tls_with_settings(tls_addr, None, tls_settings);
+        log::info!("proxy TLS listening on {}", tls_addr);
+    }
 
     // ── 7. Prometheus metrics ──
     let mut prometheus_service = ListeningService::prometheus_http_service();

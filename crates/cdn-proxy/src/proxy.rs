@@ -191,6 +191,37 @@ impl ProxyHttp for CdnProxy {
                 if is_client_tls { "https" } else { "http" }.to_string()
             });
 
+        // ── 5b. Detect TLS 1.3 early data (0-RTT) ──
+        ctx.is_early_data = session
+            .digest()
+            .and_then(|d| d.ssl_digest.as_ref())
+            .and_then(|ssl| {
+                ssl.extension
+                    .get::<crate::ssl::tls_accept::TlsHandshakeData>()
+            })
+            .map(|data| data.early_data_accepted)
+            .unwrap_or(false);
+
+        // Reject non-idempotent methods on 0-RTT early data (replay protection)
+        if ctx.is_early_data {
+            let method = session.req_header().method.as_str();
+            if !matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE") {
+                crate::logging::metrics::EARLY_DATA_REQUESTS_TOTAL
+                    .with_label_values(&[ctx.site_id.as_str(), "rejected_method"])
+                    .inc();
+                log::warn!(
+                    "[TLS] rejecting non-idempotent {} on 0-RTT early data for {}{}",
+                    method,
+                    &ctx.host,
+                    path,
+                );
+                return self.serve_too_early(session).await;
+            }
+            crate::logging::metrics::EARLY_DATA_REQUESTS_TOTAL
+                .with_label_values(&[ctx.site_id.as_str(), "accepted"])
+                .inc();
+        }
+
         // ── 6. WAF check ──
         if let Some(ref site) = ctx.site_config {
             if let Some(client_ip) = ctx.client_ip {
@@ -688,6 +719,11 @@ impl ProxyHttp for CdnProxy {
         upstream_request
             .insert_header("X-Forwarded-Proto", &ctx.scheme)
             .ok();
+
+        // RFC 8470: signal early data to upstream
+        if ctx.is_early_data {
+            upstream_request.insert_header("Early-Data", "1").ok();
+        }
 
         // Host header: use per-origin host for dynamic routing, static SNI for fallback
         if let Some(ref origin) = ctx.selected_origin {
@@ -1445,6 +1481,7 @@ impl ProxyHttp for CdnProxy {
             packaging_request: ctx.packaging_request.is_some(),
             auth_validated: ctx.auth_cleaned_path.is_some(),
             body_rejected: ctx.body_rejected,
+            early_data: ctx.is_early_data,
             node_id: self.node_id.to_string(),
         });
     }
@@ -1778,6 +1815,18 @@ impl CdnProxy {
             .await?;
         session
             .write_response_body(Some("Forbidden\n".into()), true)
+            .await?;
+        Ok(true)
+    }
+
+    async fn serve_too_early(&self, session: &mut Session) -> Result<bool> {
+        let mut header = ResponseHeader::build(425, None)?;
+        header.insert_header("Content-Type", "text/plain")?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some("425 Too Early\n".into()), true)
             .await?;
         Ok(true)
     }
