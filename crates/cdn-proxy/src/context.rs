@@ -95,6 +95,15 @@ pub struct ProxyCtx {
     pub prefetch_body_buffer: Vec<u8>,
     pub prefetch_buffering: bool,
 
+    // === Cache write state ===
+    pub cached_response_headers: Vec<(String, String)>,
+    pub cached_response_status: u16,
+    pub cached_response_tags: Vec<String>,
+    pub cached_response_swr: u64,
+
+    // === Request coalescing state ===
+    pub is_coalescing_leader: bool,
+
     // === Body inspection state ===
     pub body_inspection_enabled: bool,
     pub body_inspection_checked: bool,
@@ -149,6 +158,11 @@ impl Default for ProxyCtx {
             prefetch_manifest_type: None,
             prefetch_body_buffer: Vec::new(),
             prefetch_buffering: false,
+            cached_response_headers: Vec::new(),
+            cached_response_status: 0,
+            cached_response_tags: Vec::new(),
+            cached_response_swr: 0,
+            is_coalescing_leader: false,
             body_inspection_enabled: false,
             body_inspection_checked: false,
             body_bytes_received: 0,
@@ -182,6 +196,7 @@ pub enum CacheStatus {
     Miss,
     Bypass,
     Expired,
+    Stale,
     None,
 }
 
@@ -192,6 +207,7 @@ impl CacheStatus {
             CacheStatus::Miss => "MISS",
             CacheStatus::Bypass => "BYPASS",
             CacheStatus::Expired => "EXPIRED",
+            CacheStatus::Stale => "STALE",
             CacheStatus::None => "NONE",
         }
     }

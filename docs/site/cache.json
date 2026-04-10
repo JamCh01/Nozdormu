@@ -1,5 +1,5 @@
 {
-  "_doc": "缓存配置详解 — 多种规则类型 + 缓存键控制",
+  "_doc": "缓存配置详解 — 多种规则类型 + 缓存键控制 + SWR + Tags",
 
   "site_id": "cache-full",
   "enabled": true,
@@ -65,5 +65,32 @@
         "regex_options": "i"
       }
     ]
-  }
+  },
+
+  "_stale_while_revalidate": [
+    "Stale-While-Revalidate 由源站响应头 Cache-Control: stale-while-revalidate=N 控制",
+    "无需站点配置 — 系统自动解析并存储到 CacheMeta",
+    "缓存过期但在 SWR 窗口内时，立即返回 stale 响应（X-Cache-Status: STALE），后台异步回源刷新",
+    "示例源站响应头: Cache-Control: max-age=300, stale-while-revalidate=60"
+  ],
+
+  "_cache_tags": [
+    "Cache Tags 由源站响应头 Surrogate-Key 或 Cache-Tag 控制（空格分隔）",
+    "无需站点配置 — 系统自动解析并维护 Redis SET 反向索引",
+    "支持按 tag 批量清除: POST /_admin/cache/purge {\"type\":\"tag\",\"site_id\":\"...\",\"tag\":\"product\"}",
+    "示例源站响应头: Surrogate-Key: product homepage featured"
+  ],
+
+  "_request_coalescing": [
+    "Request Coalescing 自动启用，无需配置",
+    "同一 cache key 的并发 miss 请求排队，仅第一个回源",
+    "等待超时 30 秒，超时后独立回源"
+  ],
+
+  "_cache_warm": [
+    "缓存预热通过管理 API 触发: POST /_admin/cache/warm",
+    "请求体: {\"site_id\":\"...\",\"urls\":[{\"host\":\"example.com\",\"path\":\"/page1\"}]}",
+    "最多 1000 个 URL，并发 10 个请求，跳过已缓存的 URL",
+    "异步执行，通过 GET /_admin/cache/warm/status/{task_id} 查询进度"
+  ]
 }

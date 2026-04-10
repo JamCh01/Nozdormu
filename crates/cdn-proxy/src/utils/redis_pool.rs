@@ -388,6 +388,42 @@ impl RedisOps for RedisPool {
             .await
             .map_err(|e| e.to_string())
     }
+
+    async fn sadd(&self, key: &str, member: &str) -> Result<(), String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Ok(());
+        };
+        conn.sadd::<_, _, ()>(key, member)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn smembers(&self, key: &str) -> Result<Vec<String>, String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Err("Redis not available".to_string());
+        };
+        conn.smembers::<_, Vec<String>>(key)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn srem(&self, key: &str, member: &str) -> Result<(), String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Ok(());
+        };
+        conn.srem::<_, _, ()>(key, member)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn expire(&self, key: &str, seconds: u64) -> Result<(), String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Ok(());
+        };
+        conn.expire::<_, ()>(key, seconds as i64)
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]

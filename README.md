@@ -9,7 +9,7 @@
 - **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制
 - **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式，请求体检查（POST Body 大小限制 + 基于魔数字节的内容类型校验，使用 `infer` 库检测 200+ 文件类型）
 - **CC 防护（频率限制）** -- 本地+Redis 混合计数器，JS 挑战（HMAC-SHA256），按路径规则最长前缀匹配
-- **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除），直接哈希 Key 生成（零中间分配），批量清除并发 Redis 管道
+- **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除 + 按 Tag 清除），直接哈希 Key 生成（零中间分配），批量清除并发 Redis 管道；Stale-While-Revalidate（过期但在 SWR 窗口内立即返回 stale 响应，后台异步回源刷新）；Request Coalescing（同一 cache key 的并发 miss 请求排队，仅第一个回源）；Cache Tags（从 `Surrogate-Key`/`Cache-Tag` 响应头解析，Redis SET 反向索引，支持按 tag 批量清除）；缓存预热 API（`POST /_admin/cache/warm` 批量回源写入缓存）
 - **图片优化** -- 实时裁剪/缩放（5 种 fit 模式），格式转换（JPEG/PNG/WebP/AVIF），质量调整，通过 `Accept` 头自动协商格式，DPR 自适应（DPR 感知尺寸限制）；纯 Rust 实现（`image` + `fast_image_resize`）
 - **Range 请求** -- 客户端断点续传，`Accept-Ranges: bytes` 通告，`If-Range` 条件请求，Range 透传回源，OSS Range GET 内存高效的缓存分片服务；按站点启用/禁用
 - **视频流优化** -- 三大功能：
@@ -18,12 +18,12 @@
   - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，原子去重，响应体大小限制（256MB），提升命中率
 - **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
 - **负载均衡** -- 加权轮询、IP 哈希、随机；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
-- **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），自动续期，分布式锁；下游 TLS 监听器（动态证书选择，SNI 精确/通配符/默认回退），TLS 1.3 0-RTT Early Data（非幂等方法自动拒绝 425，上游 `Early-Data: 1` 头部 RFC 8470）
+- **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），完整 ACME v2 协议流程（HTTP-01 挑战、CSR 生成、证书下载），账户凭证 Redis 持久化，自动续期（后台服务 + Redis 分布式锁），EAB 支持；下游 TLS 监听器（动态证书选择，SNI 精确/通配符/默认回退），TLS 1.3 0-RTT Early Data（非幂等方法自动拒绝 425，上游 `Early-Data: 1` 头部 RFC 8470）
 - **重定向** -- 三层引擎：域名重定向、协议强制（HTTP/HTTPS）、URL 规则（精确/前缀/正则/域名）
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
-- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT 计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
+- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT/ACME 签发与续期/SWR 回源/请求合并/缓存预热 计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
-- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
+- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务 + 按 Tag 清除）、缓存预热（批量 URL 回源写入缓存）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
 
 ## 架构
 
@@ -145,6 +145,23 @@ curl -X POST http://localhost:6188/_admin/cache/purge \
   -H "Authorization: Bearer my_admin_bearer_token" \
   -H "Content-Type: application/json" \
   -d '{"type":"site","site_id":"example"}'
+
+# 缓存清除（按 Tag，源站通过 Surrogate-Key/Cache-Tag 响应头设置 tag）
+curl -X POST http://localhost:6188/_admin/cache/purge \
+  -H "Authorization: Bearer my_admin_bearer_token" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"tag","site_id":"example","tag":"product"}'
+
+# 缓存预热（批量回源写入缓存，异步）
+curl -X POST http://localhost:6188/_admin/cache/warm \
+  -H "Authorization: Bearer my_admin_bearer_token" \
+  -H "Content-Type: application/json" \
+  -d '{"site_id":"example","urls":[{"host":"example.com","path":"/page1"},{"host":"example.com","path":"/page2"}]}'
+# -> {"status":"accepted","task_id":"...","site_id":"example","urls_count":2}
+
+# 缓存预热任务状态
+curl -H "Authorization: Bearer my_admin_bearer_token" \
+  http://localhost:6188/_admin/cache/warm/status
 
 # 图片优化（缩放 + 自动格式协商）
 curl -H "Accept: image/avif,image/webp,*/*" \
@@ -324,7 +341,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 ## 开发
 
 ```bash
-# 运行单元/集成测试（432 个测试）
+# 运行单元/集成测试（449 个测试）
 cargo test
 
 # 代码检查

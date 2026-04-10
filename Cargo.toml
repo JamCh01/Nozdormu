@@ -82,6 +82,7 @@ infer = "0.16"
 
 # SSL/TLS
 instant-acme = "0.7"
+rcgen = "0.13"
 x509-parser = "0.16"
 
 # Cache

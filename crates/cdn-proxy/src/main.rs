@@ -17,7 +17,9 @@ use cdn_proxy::health_probe::ActiveHealthCheckService;
 use cdn_proxy::logging::queue::init_log_queue;
 use cdn_proxy::proxy::CdnProxy;
 use cdn_proxy::ssl::challenge::ChallengeStore;
+use cdn_proxy::ssl::acme::AcmeClient;
 use cdn_proxy::ssl::manager::CertManager;
+use cdn_proxy::ssl::renewal::RenewalManager;
 use cdn_proxy::ssl::storage::CertStorage;
 use cdn_proxy::ssl::tls_accept::CdnTlsAccept;
 use cdn_proxy::utils::redis_pool::RedisPool;
@@ -270,6 +272,7 @@ fn main() {
         cache_storage: Arc::clone(&cache_storage),
         redis_pool: Arc::clone(&redis_pool),
         purge_tracker: Arc::clone(&purge_tracker),
+        warm_tracker: Arc::new(cdn_proxy::admin::warm::WarmTaskTracker::new()),
     });
 
     // Active health check probes (clone refs before CdnProxy takes ownership)
@@ -291,6 +294,30 @@ fn main() {
         &cache_storage,
     )));
 
+    // ── Certificate storage (shared between TLS listener and renewal) ──
+    let cert_storage = Arc::new(CertStorage::new(Path::new(&node_config.paths.certs)));
+    cert_storage.load_all();
+    let cert_manager = Arc::new(CertManager::new(Arc::clone(&cert_storage)));
+
+    // ── ACME client and renewal manager ──
+    let acme_client = Arc::new(AcmeClient::from_config(
+        &node_config.ssl.acme_providers,
+        node_config.ssl.acme_environment == "staging",
+        node_config.ssl.acme_email.clone(),
+        &node_config.ssl.eab_credentials,
+        Arc::clone(&challenge_store),
+        Arc::clone(&redis_pool),
+    ));
+
+    let renewal_manager = Arc::new(RenewalManager::new(
+        Arc::clone(&cert_storage),
+        Arc::clone(&cert_manager),
+        Arc::clone(&acme_client),
+        Arc::clone(&redis_pool),
+        node_config.node.id.clone(),
+        node_config.ssl.renewal_days,
+    ));
+
     let cdn_proxy = CdnProxy {
         lb,
         sni,
@@ -307,6 +334,8 @@ fn main() {
         prefetch_worker,
         node_id: Arc::from(node_config.node.id.as_str()),
         admin_state: Arc::clone(&admin_state),
+        cache_storage: Arc::clone(&cache_storage),
+        coalescing_map: Arc::new(dashmap::DashMap::new()),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
@@ -315,11 +344,6 @@ fn main() {
 
     // ── TLS listener (optional) ──
     if let Some(ref tls_addr) = cdn_config.tls_listen {
-        let cert_storage =
-            Arc::new(CertStorage::new(Path::new(&node_config.paths.certs)));
-        cert_storage.load_all();
-        let cert_manager = Arc::new(CertManager::new(cert_storage));
-
         let tls_accept = CdnTlsAccept::new(Arc::clone(&cert_manager));
         let callbacks: pingora::listeners::TlsAcceptCallbacks = Box::new(tls_accept);
         let mut tls_settings =
@@ -354,12 +378,21 @@ fn main() {
         background_service("etcd watch", EtcdWatchBgService { manager: mgr })
     };
 
+    // Certificate auto-renewal
+    let renewal_bg = background_service(
+        "certificate renewal",
+        RenewalBgService {
+            manager: Arc::clone(&renewal_manager),
+        },
+    );
+
     // ── 9. Register and run ──
     server.add_service(background);
     server.add_service(proxy_service);
     server.add_service(prometheus_service);
     server.add_service(etcd_bg);
     server.add_service(health_probe_bg);
+    server.add_service(renewal_bg);
 
     log::info!("Nozdormu CDN starting...");
     server.run_forever();
@@ -382,6 +415,40 @@ impl BackgroundService for EtcdWatchBgService {
             _ = self.manager.watch_loop() => {},
             _ = shutdown.changed() => {
                 log::info!("[etcd] shutting down watch loop");
+            }
+        }
+    }
+}
+
+struct RenewalBgService {
+    manager: Arc<RenewalManager>,
+}
+
+#[async_trait]
+impl BackgroundService for RenewalBgService {
+    async fn start(&self, mut shutdown: ShutdownWatch) {
+        log::info!("[Renewal] certificate renewal service started");
+
+        // First check: 60 seconds after startup
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(60)) => {},
+            _ = shutdown.changed() => {
+                log::info!("[Renewal] shutting down before first check");
+                return;
+            }
+        }
+
+        loop {
+            let renewed = self.manager.check_and_renew().await;
+            log::info!("[Renewal] scan complete, renewed={}", renewed);
+
+            // Next check: every 24 hours
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(86400)) => {},
+                _ = shutdown.changed() => {
+                    log::info!("[Renewal] shutting down");
+                    return;
+                }
             }
         }
     }

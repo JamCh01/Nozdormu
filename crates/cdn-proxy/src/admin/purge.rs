@@ -28,6 +28,10 @@ pub enum PurgeRequest {
     Site {
         site_id: String,
     },
+    Tag {
+        site_id: String,
+        tag: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

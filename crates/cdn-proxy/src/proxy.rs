@@ -71,6 +71,13 @@ pub struct CdnProxy {
     pub prefetch_worker: Arc<cdn_streaming::prefetch::PrefetchWorker>,
     pub node_id: Arc<str>,
     pub admin_state: Arc<crate::admin::AdminState>,
+    pub cache_storage: Arc<cdn_cache::storage::CacheStorage>,
+    pub coalescing_map: Arc<dashmap::DashMap<String, Arc<CoalescingEntry>>>,
+}
+
+/// Entry for request coalescing — waiters block on `notify` until the leader completes.
+pub struct CoalescingEntry {
+    pub notify: tokio::sync::Notify,
 }
 
 #[async_trait]
@@ -493,11 +500,104 @@ impl ProxyHttp for CdnProxy {
                     &vary_values,
                 );
 
-                ctx.cache_key = Some(cache_key);
                 ctx.cache_ttl = Some(decision.ttl);
-                // Cache HIT lookup would go here when CacheStorage is wired in
-                // For now, all requests are MISS
-                ctx.cache_status = CacheStatus::Miss;
+
+                // ── Cache lookup ──
+                if self.cache_storage.is_available() {
+                    match self
+                        .cache_storage
+                        .get_with_stale(&ctx.site_id, &cache_key)
+                        .await
+                    {
+                        Some((cached, false)) => {
+                            ctx.cache_status = CacheStatus::Hit;
+                            ctx.cache_key = Some(cache_key);
+                            return self.serve_cached_response(session, ctx, cached).await;
+                        }
+                        Some((cached, true)) => {
+                            // Stale-While-Revalidate: serve stale, revalidate in background
+                            ctx.cache_status = CacheStatus::Stale;
+                            ctx.cache_key = Some(cache_key.clone());
+                            if let Some(ref site) = ctx.site_config {
+                                self.trigger_background_revalidation(
+                                    ctx.site_id.clone(),
+                                    cache_key,
+                                    Arc::clone(site),
+                                    host.clone(),
+                                    path.to_string(),
+                                    query_string.map(|s| s.to_string()),
+                                );
+                            }
+                            return self.serve_cached_response(session, ctx, cached).await;
+                        }
+                        None => {
+                            ctx.cache_status = CacheStatus::Miss;
+                        }
+                    }
+                } else {
+                    ctx.cache_status = CacheStatus::Miss;
+                }
+
+                // Set cache_key for miss path (cache write + coalescing)
+                ctx.cache_key = Some(cache_key.clone());
+
+                // ── Request coalescing ──
+                // If another request for the same cache key is in-flight,
+                // wait for it to complete then try cache again.
+                {
+                    let entry = self.coalescing_map.entry(cache_key.clone());
+                    match entry {
+                        dashmap::mapref::entry::Entry::Occupied(existing) => {
+                            let coalescing = Arc::clone(existing.get());
+                            drop(existing);
+                            let waited = tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                coalescing.notify.notified(),
+                            )
+                            .await;
+                            if waited.is_ok() {
+                                // Leader finished — try cache again
+                                if let Some((cached, _)) = self
+                                    .cache_storage
+                                    .get_with_stale(&ctx.site_id, &cache_key)
+                                    .await
+                                {
+                                    ctx.cache_status = CacheStatus::Hit;
+                                    ctx.cache_key = Some(cache_key);
+                                    crate::logging::metrics::CACHE_COALESCING_TOTAL
+                                        .with_label_values(&[
+                                            ctx.site_id.as_str(),
+                                            "waited_hit",
+                                        ])
+                                        .inc();
+                                    return self
+                                        .serve_cached_response(session, ctx, cached)
+                                        .await;
+                                }
+                                crate::logging::metrics::CACHE_COALESCING_TOTAL
+                                    .with_label_values(&[
+                                        ctx.site_id.as_str(),
+                                        "waited_miss",
+                                    ])
+                                    .inc();
+                            } else {
+                                crate::logging::metrics::CACHE_COALESCING_TOTAL
+                                    .with_label_values(&[ctx.site_id.as_str(), "timeout"])
+                                    .inc();
+                            }
+                            // Still miss or timeout — proceed to origin
+                        }
+                        dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                            vacant.insert(Arc::new(crate::proxy::CoalescingEntry {
+                                notify: tokio::sync::Notify::new(),
+                            }));
+                            ctx.is_coalescing_leader = true;
+                            crate::logging::metrics::CACHE_COALESCING_TOTAL
+                                .with_label_values(&[ctx.site_id.as_str(), "leader"])
+                                .inc();
+                        }
+                    }
+                }
             }
         }
 
@@ -841,6 +941,69 @@ impl ProxyHttp for CdnProxy {
                 .ok();
         }
 
+        // ── Cache write decision ──
+        // Determine if the upstream response should be cached and enable body accumulation.
+        if ctx.cache_key.is_some() && ctx.cache_status == CacheStatus::Miss {
+            let resp_cc = upstream_response
+                .headers
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok());
+            let has_set_cookie = upstream_response.headers.get("set-cookie").is_some();
+            let vary = upstream_response
+                .headers
+                .get("vary")
+                .and_then(|v| v.to_str().ok());
+            let cl = upstream_response
+                .headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+
+            if let Some(ref site) = ctx.site_config {
+                let resp_decision = cdn_cache::strategy::check_response_cacheability(
+                    upstream_response.status.as_u16(),
+                    resp_cc,
+                    has_set_cookie,
+                    vary,
+                    cl,
+                    &site.cache,
+                );
+                if resp_decision.cacheable {
+                    let expires = upstream_response
+                        .headers
+                        .get("expires")
+                        .and_then(|v| v.to_str().ok());
+                    let final_ttl = cdn_cache::strategy::adjust_ttl(
+                        ctx.cache_ttl.unwrap_or(site.cache.default_ttl),
+                        resp_cc,
+                        expires,
+                    );
+                    let swr =
+                        cdn_cache::strategy::parse_stale_while_revalidate(resp_cc);
+                    ctx.cache_ttl = Some(final_ttl);
+
+                    // Capture response headers for cache meta
+                    ctx.cached_response_status = upstream_response.status.as_u16();
+                    for (name, value) in upstream_response.headers.iter() {
+                        if let Ok(v) = value.to_str() {
+                            ctx.cached_response_headers
+                                .push((name.to_string(), v.to_string()));
+                        }
+                    }
+
+                    // Parse cache tags from Surrogate-Key / Cache-Tag headers
+                    ctx.cached_response_tags =
+                        cdn_cache::storage::parse_cache_tags(&ctx.cached_response_headers);
+
+                    // Store SWR value for build_cache_meta at end_of_stream
+                    ctx.cached_response_swr = swr;
+                    ctx.response_body = Some(Vec::new());
+                } else {
+                    ctx.cache_key = None; // Don't cache this response
+                }
+            }
+        }
+
         // Custom response header rules
         if let Some(ref site) = ctx.site_config {
             if !site.headers.response.is_empty() {
@@ -1134,6 +1297,64 @@ impl ProxyHttp for CdnProxy {
     where
         Self::CTX: Send + Sync,
     {
+        // ── Cache body accumulation (shadow-copy, does not consume body) ──
+        if ctx.response_body.is_some() && ctx.cache_key.is_some() {
+            if let Some(ref data) = body {
+                if let Some(ref mut buffers) = ctx.response_body {
+                    buffers.push(data.to_vec());
+                    ctx.response_body_size += data.len();
+                    // Safety cap: stop accumulating if too large
+                    let max_size = ctx
+                        .site_config
+                        .as_ref()
+                        .map(|s| s.cache.max_size)
+                        .unwrap_or(100 * 1024 * 1024);
+                    if ctx.response_body_size as u64 > max_size {
+                        log::debug!(
+                            "[Cache] body too large ({} bytes), skipping cache write",
+                            ctx.response_body_size
+                        );
+                        ctx.response_body = None;
+                        ctx.cache_key = None;
+                    }
+                }
+            }
+            if end_of_stream {
+                if let (Some(buffers), Some(ref cache_key), Some(ttl)) =
+                    (ctx.response_body.take(), &ctx.cache_key, ctx.cache_ttl)
+                {
+                    let full_body: Vec<u8> =
+                        buffers.into_iter().flatten().collect();
+                    let meta = cdn_cache::storage::build_cache_meta(
+                        ctx.cached_response_status,
+                        &ctx.cached_response_headers,
+                        ttl,
+                        full_body.len() as u64,
+                        ctx.cached_response_swr,
+                        std::mem::take(&mut ctx.cached_response_tags),
+                    );
+                    let storage = Arc::clone(&self.cache_storage);
+                    let sid = ctx.site_id.clone();
+                    let ck = cache_key.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = storage.put(&sid, &ck, &meta, full_body).await {
+                            log::warn!("[Cache] write failed: {}", e);
+                        }
+                    });
+                }
+            }
+        }
+
+        // ── Coalescing: notify waiters on end_of_stream ──
+        if end_of_stream && ctx.is_coalescing_leader {
+            if let Some(ref cache_key) = ctx.cache_key {
+                if let Some((_, entry)) = self.coalescing_map.remove(cache_key) {
+                    entry.notify.notify_waiters();
+                }
+            }
+            ctx.is_coalescing_leader = false;
+        }
+
         // ── Range slice from origin 200 path ──
         // Origin returned full 200 but client wanted Range. Buffer full body,
         // then slice on end_of_stream.
@@ -1399,6 +1620,16 @@ impl ProxyHttp for CdnProxy {
         _e: Option<&pingora::Error>,
         ctx: &mut Self::CTX,
     ) {
+        // Safety net: release coalescing waiters if still leader
+        if ctx.is_coalescing_leader {
+            if let Some(ref cache_key) = ctx.cache_key {
+                if let Some((_, entry)) = self.coalescing_map.remove(cache_key) {
+                    entry.notify.notify_waiters();
+                }
+            }
+            ctx.is_coalescing_leader = false;
+        }
+
         let status = session
             .response_written()
             .map(|r| r.status.as_u16())
@@ -1526,6 +1757,17 @@ impl ProxyHttp for CdnProxy {
             max_retries,
             e
         );
+
+        // Release coalescing waiters on final failure
+        if ctx.is_coalescing_leader {
+            if let Some(ref cache_key) = ctx.cache_key {
+                if let Some((_, entry)) = self.coalescing_map.remove(cache_key) {
+                    entry.notify.notify_waiters();
+                }
+            }
+            ctx.is_coalescing_leader = false;
+        }
+
         e
     }
 }
@@ -1623,6 +1865,17 @@ impl CdnProxy {
             }
             ("GET", "/cache/purge/status") => {
                 crate::admin::endpoints::purge_list_tasks(&self.admin_state).await
+            }
+            ("POST", "/cache/warm") => {
+                let req_body = self.read_request_body(session).await;
+                crate::admin::endpoints::warm_cache(&self.admin_state, &req_body).await
+            }
+            ("GET", p) if p.starts_with("/cache/warm/status/") => {
+                let task_id = &p[19..]; // strip "/cache/warm/status/"
+                crate::admin::endpoints::warm_status(&self.admin_state, task_id).await
+            }
+            ("GET", "/cache/warm/status") => {
+                crate::admin::endpoints::warm_list_tasks(&self.admin_state).await
             }
             _ => (
                 404,
@@ -1969,6 +2222,144 @@ impl CdnProxy {
             .await?;
         session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
+    }
+
+    /// Serve a cached response directly, short-circuiting the upstream path.
+    async fn serve_cached_response(
+        &self,
+        session: &mut Session,
+        ctx: &mut ProxyCtx,
+        cached: cdn_cache::storage::CachedResponse,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(cached.meta.status, None)?;
+        for (name, value) in &cached.meta.headers {
+            header.insert_header(name.clone(), value.clone()).ok();
+        }
+        header
+            .insert_header("X-Cache-Status", ctx.cache_status.as_str())
+            .ok();
+        header
+            .insert_header("X-Request-ID", &ctx.request_id)
+            .ok();
+        let age = (chrono::Utc::now().timestamp() - cached.meta.cached_at).max(0);
+        header.insert_header("Age", age.to_string()).ok();
+        header
+            .insert_header("Content-Length", cached.body.len().to_string())
+            .ok();
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some(cached.body.into()), true)
+            .await?;
+        Ok(true)
+    }
+
+    /// Trigger a background revalidation for stale-while-revalidate.
+    /// Fetches from origin via reqwest and updates the cache.
+    fn trigger_background_revalidation(
+        &self,
+        site_id: String,
+        cache_key: String,
+        site: Arc<cdn_common::SiteConfig>,
+        host: String,
+        path: String,
+        query: Option<String>,
+    ) {
+        let storage = Arc::clone(&self.cache_storage);
+        let origin = match site.origins.iter().find(|o| o.enabled && !o.backup) {
+            Some(o) => o.clone(),
+            None => return,
+        };
+
+        tokio::spawn(async move {
+            let scheme = match origin.protocol {
+                cdn_common::OriginProtocol::Https => "https",
+                cdn_common::OriginProtocol::Http => "http",
+            };
+            let url = match query {
+                Some(ref q) if !q.is_empty() => {
+                    format!("{}://{}:{}{}?{}", scheme, origin.host, origin.port, path, q)
+                }
+                _ => format!("{}://{}:{}{}", scheme, origin.host, origin.port, path),
+            };
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_default();
+
+            match client
+                .get(&url)
+                .header("Host", &host)
+                .header("User-Agent", "Nozdormu-SWR/1.0")
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let headers: Vec<(String, String)> = resp
+                        .headers()
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect();
+                    match resp.bytes().await {
+                        Ok(body) => {
+                            let cc = headers
+                                .iter()
+                                .find(|(k, _)| k == "cache-control")
+                                .map(|(_, v)| v.as_str());
+                            let expires_h = headers
+                                .iter()
+                                .find(|(k, _)| k == "expires")
+                                .map(|(_, v)| v.as_str());
+                            let ttl = cdn_cache::strategy::adjust_ttl(
+                                site.cache.default_ttl,
+                                cc,
+                                expires_h,
+                            );
+                            let swr =
+                                cdn_cache::strategy::parse_stale_while_revalidate(cc);
+                            let tags = cdn_cache::storage::parse_cache_tags(&headers);
+                            let meta = cdn_cache::storage::build_cache_meta(
+                                status,
+                                &headers,
+                                ttl,
+                                body.len() as u64,
+                                swr,
+                                tags,
+                            );
+                            if let Err(e) =
+                                storage.put(&site_id, &cache_key, &meta, body.to_vec()).await
+                            {
+                                log::warn!("[SWR] revalidation cache write failed: {}", e);
+                                crate::logging::metrics::CACHE_SWR_REVALIDATION_TOTAL
+                                    .with_label_values(&[site_id.as_str(), "error"])
+                                    .inc();
+                            } else {
+                                log::debug!("[SWR] revalidated cache for {}", cache_key);
+                                crate::logging::metrics::CACHE_SWR_REVALIDATION_TOTAL
+                                    .with_label_values(&[site_id.as_str(), "success"])
+                                    .inc();
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("[SWR] revalidation body read failed: {}", e);
+                            crate::logging::metrics::CACHE_SWR_REVALIDATION_TOTAL
+                                .with_label_values(&[site_id.as_str(), "error"])
+                                .inc();
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[SWR] revalidation fetch failed: {}", e);
+                    crate::logging::metrics::CACHE_SWR_REVALIDATION_TOTAL
+                        .with_label_values(&[site_id.as_str(), "error"])
+                        .inc();
+                }
+            }
+        });
     }
 }
 

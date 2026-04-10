@@ -290,6 +290,14 @@ fn parse_directive(cache_control: &str, directive: &str) -> Option<u64> {
     None
 }
 
+/// Parse the `stale-while-revalidate` directive from Cache-Control.
+/// Returns 0 if not present.
+pub fn parse_stale_while_revalidate(cache_control: Option<&str>) -> u64 {
+    cache_control
+        .and_then(|cc| parse_directive(&cc.to_ascii_lowercase(), "stale-while-revalidate"))
+        .unwrap_or(0)
+}
+
 /// Headers that should be excluded from cached responses.
 pub const EXCLUDED_RESPONSE_HEADERS: &[&str] = &[
     "set-cookie",
@@ -551,5 +559,32 @@ mod tests {
         let d = check_request_cacheability("GET", "/api/data", None, false, &cfg);
         assert!(d.cacheable);
         assert_eq!(d.ttl, cfg.default_ttl);
+    }
+
+    // ── Stale-While-Revalidate parsing ──
+
+    #[test]
+    fn test_swr_present() {
+        let swr = parse_stale_while_revalidate(Some("max-age=300, stale-while-revalidate=60"));
+        assert_eq!(swr, 60);
+    }
+
+    #[test]
+    fn test_swr_absent() {
+        let swr = parse_stale_while_revalidate(Some("max-age=300"));
+        assert_eq!(swr, 0);
+    }
+
+    #[test]
+    fn test_swr_none() {
+        let swr = parse_stale_while_revalidate(None);
+        assert_eq!(swr, 0);
+    }
+
+    #[test]
+    fn test_swr_case_insensitive() {
+        let swr =
+            parse_stale_while_revalidate(Some("Max-Age=300, Stale-While-Revalidate=120"));
+        assert_eq!(swr, 120);
     }
 }

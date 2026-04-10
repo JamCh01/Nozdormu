@@ -2,6 +2,7 @@ use crate::admin::purge::{
     purge_site_background, purge_url, validate_purge_url, validate_site_id, PurgeRequest,
     PurgeTaskState, PurgeTaskStatus, PurgeTaskTracker,
 };
+use crate::admin::warm::{self, WarmRequest, WarmTaskState, WarmTaskStatus, WarmTaskTracker};
 use crate::balancer::DynamicBalancer;
 use crate::ssl::challenge::ChallengeStore;
 use crate::utils::redis_pool::RedisPool;
@@ -25,6 +26,7 @@ pub struct AdminState {
     pub cache_storage: Arc<CacheStorage>,
     pub redis_pool: Arc<RedisPool>,
     pub purge_tracker: Arc<PurgeTaskTracker>,
+    pub warm_tracker: Arc<WarmTaskTracker>,
 }
 
 /// Constant-time byte comparison (re-export from cdn-common).
@@ -302,6 +304,52 @@ pub async fn purge_cache(state: &AdminState, body: &[u8]) -> (u16, Value) {
                 }),
             )
         }
+        PurgeRequest::Tag { site_id, tag } => {
+            if let Err(e) = validate_site_id(&site_id) {
+                return (400, json!({"status": "error", "message": e}));
+            }
+            if tag.is_empty() {
+                return (
+                    400,
+                    json!({"status": "error", "message": "tag cannot be empty"}),
+                );
+            }
+            if tag.len() > 128 {
+                return (
+                    400,
+                    json!({"status": "error", "message": "tag too long (max 128 chars)"}),
+                );
+            }
+            if !state.live_config.load().sites.contains_key(&site_id) {
+                return (
+                    404,
+                    json!({"status": "error", "message": format!("site '{}' not found", site_id)}),
+                );
+            }
+
+            log::info!(
+                "[Admin] cache purge tag: site={} tag={}",
+                site_id,
+                tag
+            );
+
+            match state.cache_storage.delete_by_tag(&site_id, &tag).await {
+                Ok(deleted) => (
+                    200,
+                    json!({
+                        "status": "ok",
+                        "purge_type": "tag",
+                        "site_id": site_id,
+                        "tag": tag,
+                        "keys_deleted": deleted,
+                    }),
+                ),
+                Err(e) => (
+                    500,
+                    json!({"status": "error", "message": format!("tag purge failed: {}", e)}),
+                ),
+            }
+        }
     }
 }
 
@@ -319,5 +367,106 @@ pub async fn purge_status(state: &AdminState, task_id: &str) -> (u16, Value) {
 /// GET /_admin/cache/purge/status — List all purge tasks.
 pub async fn purge_list_tasks(state: &AdminState) -> (u16, Value) {
     let tasks = state.purge_tracker.list();
+    (200, json!({ "tasks": tasks }))
+}
+
+/// POST /_admin/cache/warm — Start cache warming.
+pub async fn warm_cache(state: &AdminState, body: &[u8]) -> (u16, Value) {
+    let req: WarmRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                json!({"status": "error", "message": format!("invalid body: {}", e)}),
+            )
+        }
+    };
+
+    if let Err(e) = validate_site_id(&req.site_id) {
+        return (400, json!({"status": "error", "message": e}));
+    }
+
+    let config = state.live_config.load();
+    let site = match config.sites.get(&req.site_id) {
+        Some(s) => Arc::clone(s),
+        None => {
+            return (
+                404,
+                json!({"status": "error", "message": format!("site '{}' not found", req.site_id)}),
+            )
+        }
+    };
+
+    if req.urls.is_empty() {
+        return (
+            400,
+            json!({"status": "error", "message": "urls list is empty"}),
+        );
+    }
+    if req.urls.len() > 1000 {
+        return (
+            400,
+            json!({"status": "error", "message": "too many URLs (max 1000)"}),
+        );
+    }
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    let urls_count = req.urls.len();
+
+    let task_status = WarmTaskStatus {
+        task_id: task_id.clone(),
+        site_id: req.site_id.clone(),
+        status: WarmTaskState::Running,
+        urls_total: urls_count as u32,
+        urls_completed: 0,
+        urls_failed: 0,
+        started_at: now,
+        completed_at: None,
+        error: None,
+    };
+    state.warm_tracker.insert(task_status);
+
+    log::info!(
+        "[Admin] cache warm: site={} urls={} task={}",
+        req.site_id,
+        urls_count,
+        task_id
+    );
+
+    let cache_storage = Arc::clone(&state.cache_storage);
+    let tracker = Arc::clone(&state.warm_tracker);
+    let tid = task_id.clone();
+    let sid = req.site_id.clone();
+
+    tokio::spawn(async move {
+        warm::warm_urls_background(cache_storage, site, sid, req.urls, tracker, tid).await;
+    });
+
+    (
+        202,
+        json!({
+            "status": "accepted",
+            "task_id": task_id,
+            "site_id": req.site_id,
+            "urls_count": urls_count,
+        }),
+    )
+}
+
+/// GET /_admin/cache/warm/status/{task_id} — Get warm task status.
+pub async fn warm_status(state: &AdminState, task_id: &str) -> (u16, Value) {
+    match state.warm_tracker.get(task_id) {
+        Some(task) => (
+            200,
+            serde_json::to_value(task).unwrap_or(json!({"status": "error"})),
+        ),
+        None => (404, json!({"status": "error", "message": "task not found"})),
+    }
+}
+
+/// GET /_admin/cache/warm/status — List all warm tasks.
+pub async fn warm_list_tasks(state: &AdminState) -> (u16, Value) {
+    let tasks = state.warm_tracker.list();
     (200, json!({ "tasks": tasks }))
 }

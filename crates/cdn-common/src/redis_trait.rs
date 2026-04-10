@@ -22,4 +22,16 @@ pub trait RedisOps: Send + Sync {
     /// Increment a key by delta with expiry (seconds), returning the new value.
     /// Atomically sets the TTL so counters don't leak in Redis.
     async fn incr_by_ex(&self, key: &str, delta: u64, expire_secs: u64) -> Result<u64, String>;
+
+    /// Add a member to a Redis SET.
+    async fn sadd(&self, key: &str, member: &str) -> Result<(), String>;
+
+    /// Get all members of a Redis SET.
+    async fn smembers(&self, key: &str) -> Result<Vec<String>, String>;
+
+    /// Remove a member from a Redis SET.
+    async fn srem(&self, key: &str, member: &str) -> Result<(), String>;
+
+    /// Set a TTL (in seconds) on a key.
+    async fn expire(&self, key: &str, seconds: u64) -> Result<(), String>;
 }

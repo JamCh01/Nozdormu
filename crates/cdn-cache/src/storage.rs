@@ -14,6 +14,10 @@ pub struct CacheMeta {
     pub expires_at: i64, // Unix timestamp
     pub size: u64,
     pub etag: Option<String>,
+    #[serde(default)]
+    pub stale_while_revalidate: u64, // seconds; 0 = disabled
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Full cached response (metadata + body).
@@ -117,6 +121,8 @@ impl CacheStorage {
                         expires_at: now + 60, // 60s conservative TTL — caller should revalidate
                         size: data.len() as u64,
                         etag: None,
+                        stale_while_revalidate: 0,
+                        tags: Vec::new(),
                     },
                     body: data,
                 })
@@ -125,6 +131,110 @@ impl CacheStorage {
                 log::debug!("[Cache] miss: {}", object_path);
                 None
             }
+            Err(e) => {
+                log::error!("[Cache] OSS get error: {} - {}", object_path, e);
+                None
+            }
+        }
+    }
+
+    /// Read a cached response, allowing stale reads within the SWR window.
+    /// Returns `(CachedResponse, is_stale)` where `is_stale=true` means the entry
+    /// is expired but within the `stale-while-revalidate` window.
+    pub async fn get_with_stale(
+        &self,
+        site_id: &str,
+        cache_key: &str,
+    ) -> Option<(CachedResponse, bool)> {
+        let oss = self.oss.as_ref()?;
+        let object_path = cache_object_path(site_id, cache_key);
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+
+        // Step 1: Try Redis metadata first
+        if let Some(ref redis) = self.redis {
+            if let Ok(Some(meta_json)) = redis.get(&redis_key).await {
+                if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
+                    let now = chrono::Utc::now().timestamp();
+                    if meta.expires_at <= now {
+                        // Check stale-while-revalidate window
+                        let stale_deadline =
+                            meta.expires_at + meta.stale_while_revalidate as i64;
+                        if meta.stale_while_revalidate > 0 && stale_deadline > now {
+                            // Within SWR window — return stale response
+                            match oss.get_object(&object_path).await {
+                                Ok(body) => {
+                                    return Some((CachedResponse { meta, body }, true))
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Cache] OSS get failed for stale entry: {}",
+                                        e
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                        // Beyond SWR window — truly expired
+                        log::debug!("[Cache] expired meta: {}", object_path);
+                        let redis = Arc::clone(redis);
+                        let rk = redis_key.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = redis.del(&rk).await {
+                                log::warn!(
+                                    "[Cache] background Redis DEL failed: {} - {}",
+                                    rk,
+                                    e
+                                );
+                            }
+                        });
+                        return None;
+                    }
+                    // Not expired — fresh hit
+                    match oss.get_object(&object_path).await {
+                        Ok(body) => return Some((CachedResponse { meta, body }, false)),
+                        Err(e) => {
+                            log::warn!("[Cache] OSS get failed after meta hit: {}", e);
+                            let redis = Arc::clone(redis);
+                            let rk = redis_key.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = redis.del(&rk).await {
+                                    log::warn!(
+                                        "[Cache] background Redis DEL failed: {} - {}",
+                                        rk,
+                                        e
+                                    );
+                                }
+                            });
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: OSS-only path (no Redis metadata available).
+        match oss.get_object(&object_path).await {
+            Ok(data) => {
+                let now = chrono::Utc::now().timestamp();
+                log::debug!("[Cache] OSS hit (no meta, stale-eligible): {}", object_path);
+                Some((
+                    CachedResponse {
+                        meta: CacheMeta {
+                            status: 200,
+                            headers: HashMap::new(),
+                            cached_at: now,
+                            expires_at: now + 60,
+                            size: data.len() as u64,
+                            etag: None,
+                            stale_while_revalidate: 0,
+                            tags: Vec::new(),
+                        },
+                        body: data,
+                    },
+                    false,
+                ))
+            }
+            Err(OssError::NotFound) => None,
             Err(e) => {
                 log::error!("[Cache] OSS get error: {} - {}", object_path, e);
                 None
@@ -201,6 +311,20 @@ impl CacheStorage {
             if let Err(e) = redis.setex(&redis_key, ttl, &meta_json).await {
                 log::warn!("[Cache] Redis SETEX failed: {} - {}", redis_key, e);
             }
+
+            // Write tag index entries
+            if !meta.tags.is_empty() {
+                for tag in &meta.tags {
+                    let tag_key = format!("nozdormu:cache:tag:{}:{}", site_id, tag);
+                    if let Err(e) = redis.sadd(&tag_key, cache_key).await {
+                        log::warn!("[Cache] Redis SADD failed: {} - {}", tag_key, e);
+                    }
+                    // Set TTL on tag set to match meta TTL + 1h buffer
+                    if let Err(e) = redis.expire(&tag_key, ttl + 3600).await {
+                        log::warn!("[Cache] Redis EXPIRE failed on tag key: {}", e);
+                    }
+                }
+            }
         }
 
         log::debug!(
@@ -218,12 +342,26 @@ impl CacheStorage {
         let oss = self.oss.as_ref().ok_or("OSS not configured")?;
         let object_path = cache_object_path(site_id, cache_key);
 
+        // Clean up tag index entries before deleting meta
+        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
+        if let Some(ref redis) = self.redis {
+            if let Ok(Some(meta_json)) = redis.get(&redis_key).await {
+                if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
+                    for tag in &meta.tags {
+                        let tag_key = format!("nozdormu:cache:tag:{}:{}", site_id, tag);
+                        if let Err(e) = redis.srem(&tag_key, cache_key).await {
+                            log::warn!("[Cache] Redis SREM failed: {} - {}", tag_key, e);
+                        }
+                    }
+                }
+            }
+        }
+
         oss.delete_object(&object_path)
             .await
             .map_err(|e| format!("OSS delete error: {}", e))?;
 
         // Redis DEL meta
-        let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
         if let Some(ref redis) = self.redis {
             if let Err(e) = redis.del(&redis_key).await {
                 log::warn!("[Cache] Redis DEL failed: {} - {}", redis_key, e);
@@ -313,6 +451,33 @@ impl CacheStorage {
 
         Ok(deleted)
     }
+
+    /// Purge all cache entries matching a tag.
+    /// 1. SMEMBERS to get all cache keys for the tag
+    /// 2. delete_many() to remove them
+    /// 3. DEL the tag set itself
+    pub async fn delete_by_tag(&self, site_id: &str, tag: &str) -> Result<u64, String> {
+        let redis = self.redis.as_ref().ok_or("Redis not available")?;
+        let tag_key = format!("nozdormu:cache:tag:{}:{}", site_id, tag);
+
+        let cache_keys: Vec<String> = redis
+            .smembers(&tag_key)
+            .await
+            .map_err(|e| format!("SMEMBERS failed: {}", e))?;
+
+        if cache_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let deleted = self.delete_many(site_id, &cache_keys).await?;
+
+        // Remove the tag set itself
+        if let Err(e) = redis.del(&tag_key).await {
+            log::warn!("[Cache] Redis DEL tag key failed: {} - {}", tag_key, e);
+        }
+
+        Ok(deleted as u64)
+    }
 }
 
 /// Build CacheMeta from response status and headers.
@@ -321,6 +486,8 @@ pub fn build_cache_meta(
     headers: &[(String, String)],
     ttl: u64,
     body_size: u64,
+    stale_while_revalidate: u64,
+    tags: Vec<String>,
 ) -> CacheMeta {
     let now = chrono::Utc::now().timestamp();
     let etag = headers
@@ -350,5 +517,115 @@ pub fn build_cache_meta(
         },
         size: body_size,
         etag,
+        stale_while_revalidate,
+        tags,
+    }
+}
+
+/// Parse cache tags from response headers.
+/// Checks `Surrogate-Key` and `Cache-Tag` headers (space-separated, deduplicated).
+pub fn parse_cache_tags(headers: &[(String, String)]) -> Vec<String> {
+    let mut tags = Vec::new();
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("surrogate-key") || name.eq_ignore_ascii_case("cache-tag") {
+            for tag in value.split_whitespace() {
+                let t = tag.trim();
+                if !t.is_empty() && !tags.contains(&t.to_string()) {
+                    tags.push(t.to_string());
+                }
+            }
+        }
+    }
+    tags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cache_tags_surrogate_key() {
+        let headers = vec![
+            ("surrogate-key".to_string(), "tag1 tag2 tag3".to_string()),
+        ];
+        let tags = parse_cache_tags(&headers);
+        assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
+    }
+
+    #[test]
+    fn test_parse_cache_tags_cache_tag() {
+        let headers = vec![("Cache-Tag".to_string(), "product homepage".to_string())];
+        let tags = parse_cache_tags(&headers);
+        assert_eq!(tags, vec!["product", "homepage"]);
+    }
+
+    #[test]
+    fn test_parse_cache_tags_both_headers() {
+        let headers = vec![
+            ("Surrogate-Key".to_string(), "tag1 tag2".to_string()),
+            ("Cache-Tag".to_string(), "tag3 tag1".to_string()), // tag1 is duplicate
+        ];
+        let tags = parse_cache_tags(&headers);
+        assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
+    }
+
+    #[test]
+    fn test_parse_cache_tags_empty() {
+        let headers: Vec<(String, String)> = vec![];
+        let tags = parse_cache_tags(&headers);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cache_tags_no_matching_headers() {
+        let headers = vec![("content-type".to_string(), "text/html".to_string())];
+        let tags = parse_cache_tags(&headers);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_cache_meta_serde_backward_compat() {
+        // Existing entries without stale_while_revalidate and tags should deserialize
+        let json = r#"{
+            "status": 200,
+            "headers": {},
+            "cached_at": 1000,
+            "expires_at": 2000,
+            "size": 100,
+            "etag": null
+        }"#;
+        let meta: CacheMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.stale_while_revalidate, 0);
+        assert!(meta.tags.is_empty());
+    }
+
+    #[test]
+    fn test_cache_meta_serde_with_new_fields() {
+        let json = r#"{
+            "status": 200,
+            "headers": {},
+            "cached_at": 1000,
+            "expires_at": 2000,
+            "size": 100,
+            "etag": null,
+            "stale_while_revalidate": 60,
+            "tags": ["product", "homepage"]
+        }"#;
+        let meta: CacheMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.stale_while_revalidate, 60);
+        assert_eq!(meta.tags, vec!["product", "homepage"]);
+    }
+
+    #[test]
+    fn test_build_cache_meta_with_tags() {
+        let headers = vec![
+            ("content-type".to_string(), "text/html".to_string()),
+            ("surrogate-key".to_string(), "tag1 tag2".to_string()),
+        ];
+        let meta = build_cache_meta(200, &headers, 3600, 1024, 60, vec!["tag1".to_string(), "tag2".to_string()]);
+        assert_eq!(meta.status, 200);
+        assert_eq!(meta.stale_while_revalidate, 60);
+        assert_eq!(meta.tags, vec!["tag1", "tag2"]);
+        assert!(meta.expires_at > meta.cached_at);
     }
 }

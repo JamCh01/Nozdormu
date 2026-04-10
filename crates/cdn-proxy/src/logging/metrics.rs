@@ -243,6 +243,75 @@ pub static EARLY_DATA_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── ACME Certificate Issuance ──
+
+pub static ACME_ISSUANCE_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_acme_issuance_total",
+        "Total ACME certificate issuance attempts",
+        &["provider", "result"] // result: "success", "failure", "skipped"
+    )
+    .unwrap()
+});
+
+pub static ACME_ISSUANCE_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_acme_issuance_duration_seconds",
+        "ACME certificate issuance duration",
+        &["provider"],
+        vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+    )
+    .unwrap()
+});
+
+pub static ACME_RENEWAL_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_acme_renewal_total",
+        "Total certificate renewal attempts",
+        &["result"] // result: "success", "failure", "skipped"
+    )
+    .unwrap()
+});
+
+// ── Cache SWR / Coalescing / Warm metrics ──
+
+pub static CACHE_SWR_REVALIDATION_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_cache_swr_revalidation_total",
+        "Total stale-while-revalidate background revalidations",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
+pub static CACHE_COALESCING_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_cache_coalescing_total",
+        "Total coalesced requests",
+        &["site_id", "result"] // leader, waited_hit, waited_miss, timeout
+    )
+    .unwrap()
+});
+
+pub static CACHE_WARM_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_cache_warm_total",
+        "Total cache warm operations",
+        &["site_id", "result"]
+    )
+    .unwrap()
+});
+
+pub static CACHE_WARM_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "cdn_cache_warm_duration_seconds",
+        "Cache warm operation duration",
+        &["site_id"],
+        vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0]
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

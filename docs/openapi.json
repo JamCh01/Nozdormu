@@ -3,7 +3,7 @@
   "info": {
     "title": "Nozdormu CDN Admin API",
     "description": "Management API for the Nozdormu CDN reverse proxy. All endpoints are served on the proxy port under the `/_admin/` prefix and require Bearer token authentication configured via etcd `{prefix}/global/security`.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "contact": {
       "name": "Nozdormu CDN"
     }
@@ -245,7 +245,7 @@
       "post": {
         "operationId": "purgeCache",
         "summary": "Purge cache entries",
-        "description": "Purge by exact URL (synchronous) or by entire site (asynchronous background task). The request body `type` field determines the variant.",
+        "description": "Purge by exact URL (synchronous), by entire site (asynchronous background task), or by cache tag (synchronous). The request body `type` field determines the variant.",
         "tags": ["Cache"],
         "requestBody": {
           "required": true,
@@ -254,13 +254,15 @@
               "schema": {
                 "oneOf": [
                   { "$ref": "#/components/schemas/PurgeUrlRequest" },
-                  { "$ref": "#/components/schemas/PurgeSiteRequest" }
+                  { "$ref": "#/components/schemas/PurgeSiteRequest" },
+                  { "$ref": "#/components/schemas/PurgeTagRequest" }
                 ],
                 "discriminator": {
                   "propertyName": "type",
                   "mapping": {
                     "url": "#/components/schemas/PurgeUrlRequest",
-                    "site": "#/components/schemas/PurgeSiteRequest"
+                    "site": "#/components/schemas/PurgeSiteRequest",
+                    "tag": "#/components/schemas/PurgeTagRequest"
                   }
                 }
               }
@@ -269,19 +271,34 @@
         },
         "responses": {
           "200": {
-            "description": "URL purge completed",
+            "description": "URL or tag purge completed",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": { "type": "string", "enum": ["ok"] },
-                    "purge_type": { "type": "string", "enum": ["url"] },
-                    "site_id": { "type": "string" },
-                    "cache_key": { "type": "string" },
-                    "keys_deleted": { "type": "integer" }
-                  },
-                  "required": ["status", "purge_type", "site_id", "cache_key", "keys_deleted"]
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["ok"] },
+                        "purge_type": { "type": "string", "enum": ["url"] },
+                        "site_id": { "type": "string" },
+                        "cache_key": { "type": "string" },
+                        "keys_deleted": { "type": "integer" }
+                      },
+                      "required": ["status", "purge_type", "site_id", "cache_key", "keys_deleted"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["ok"] },
+                        "purge_type": { "type": "string", "enum": ["tag"] },
+                        "site_id": { "type": "string" },
+                        "tag": { "type": "string" },
+                        "keys_deleted": { "type": "integer" }
+                      },
+                      "required": ["status", "purge_type", "site_id", "tag", "keys_deleted"]
+                    }
+                  ]
                 }
               }
             }
@@ -304,7 +321,7 @@
             }
           },
           "400": {
-            "description": "Invalid request (bad body, invalid site_id, invalid host/path)",
+            "description": "Invalid request (bad body, invalid site_id, invalid host/path, invalid tag)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ErrorResponse" }
@@ -392,6 +409,122 @@
                     "tasks": {
                       "type": "array",
                       "items": { "$ref": "#/components/schemas/PurgeTaskStatus" }
+                    }
+                  },
+                  "required": ["tasks"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/warm": {
+      "post": {
+        "operationId": "warmCache",
+        "summary": "Start cache warming",
+        "description": "Submit a list of URLs to pre-fetch from origin and store in cache. Runs as an asynchronous background task with concurrency limit of 10. Maximum 1000 URLs per request. Already-cached URLs are skipped.",
+        "tags": ["Cache"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WarmRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Warm task accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["accepted"] },
+                    "task_id": { "type": "string", "format": "uuid" },
+                    "site_id": { "type": "string" },
+                    "urls_count": { "type": "integer" }
+                  },
+                  "required": ["status", "task_id", "site_id", "urls_count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (bad body, empty URLs, too many URLs, invalid site_id)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/warm/status/{task_id}": {
+      "get": {
+        "operationId": "getWarmStatus",
+        "summary": "Get warm task status",
+        "description": "Returns the status of a background cache-warm task by its task ID.",
+        "tags": ["Cache"],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Warm task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Warm task status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WarmTaskStatus" }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/warm/status": {
+      "get": {
+        "operationId": "listWarmTasks",
+        "summary": "List all warm tasks",
+        "description": "Returns all tracked warm tasks. Completed tasks are auto-evicted after 1 hour.",
+        "tags": ["Cache"],
+        "responses": {
+          "200": {
+            "description": "List of warm tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/WarmTaskStatus" }
                     }
                   },
                   "required": ["tasks"]
@@ -494,6 +627,16 @@
         },
         "required": ["type", "site_id"]
       },
+      "PurgeTagRequest": {
+        "type": "object",
+        "description": "Purge all cache entries matching a cache tag. Tags are parsed from origin Surrogate-Key / Cache-Tag response headers.",
+        "properties": {
+          "type": { "type": "string", "enum": ["tag"] },
+          "site_id": { "type": "string" },
+          "tag": { "type": "string", "maxLength": 128, "description": "Cache tag to purge (from Surrogate-Key / Cache-Tag headers)" }
+        },
+        "required": ["type", "site_id", "tag"]
+      },
       "PurgeTaskStatus": {
         "type": "object",
         "properties": {
@@ -506,6 +649,43 @@
           "error": { "type": ["string", "null"], "description": "Error message, omitted when null" }
         },
         "required": ["task_id", "site_id", "status", "keys_deleted", "started_at"]
+      },
+      "WarmRequest": {
+        "type": "object",
+        "description": "Request to pre-warm cache by fetching URLs from origin.",
+        "properties": {
+          "site_id": { "type": "string" },
+          "urls": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": { "$ref": "#/components/schemas/WarmUrl" }
+          }
+        },
+        "required": ["site_id", "urls"]
+      },
+      "WarmUrl": {
+        "type": "object",
+        "properties": {
+          "host": { "type": "string", "description": "Host header for the request" },
+          "path": { "type": "string", "description": "URL path (must start with /)" },
+          "query_string": { "type": ["string", "null"], "description": "Optional query string" }
+        },
+        "required": ["host", "path"]
+      },
+      "WarmTaskStatus": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "format": "uuid" },
+          "site_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+          "urls_total": { "type": "integer" },
+          "urls_completed": { "type": "integer" },
+          "urls_failed": { "type": "integer" },
+          "started_at": { "type": "integer", "format": "int64", "description": "Unix timestamp" },
+          "completed_at": { "type": ["integer", "null"], "format": "int64", "description": "Unix timestamp, omitted when null" },
+          "error": { "type": ["string", "null"], "description": "Error message, omitted when null" }
+        },
+        "required": ["task_id", "site_id", "status", "urls_total", "urls_completed", "urls_failed", "started_at"]
       }
     }
   },
@@ -515,6 +695,6 @@
     { "name": "Sites", "description": "Site configuration queries" },
     { "name": "Upstream", "description": "Upstream origin health management" },
     { "name": "CC", "description": "CC rate limiting status" },
-    { "name": "Cache", "description": "Cache purge operations" }
+    { "name": "Cache", "description": "Cache purge, warm, and management operations" }
   ]
 }
