@@ -360,12 +360,12 @@ bash tests/e2e/teardown.sh
 项目使用 GitHub Actions 进行持续集成和发布：
 
 - **CI**（`push`/`PR` 到 `main`）：check → clippy → fmt → test → build release
-- **Release**（推送 `v*` tag）：构建 x86_64 + aarch64 Linux 二进制，创建 GitHub Release
+- **Release**（推送 `v*` tag）：构建 x86_64/aarch64 Linux 二进制（glibc + musl 静态链接），创建 GitHub Release
 
 ```bash
 # 发布新版本
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 # GitHub Actions 自动构建并创建 Release
 ```
 
