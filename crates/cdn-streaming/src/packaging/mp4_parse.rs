@@ -511,9 +511,9 @@ fn parse_stsz(data: &[u8], stbl: &Atom) -> Result<Vec<u32>, Mp4Error> {
     let sample_count = read_u32(d, 8)? as usize;
 
     if sample_size != 0 {
-        // Fixed sample size — cap to what data could hold to prevent OOM
-        let max_possible = d.len().saturating_sub(12) / 4;
-        let capped = sample_count.min(max_possible).min(10_000_000);
+        // Fixed sample size — no per-sample entries in data, just repeat the value.
+        // Cap to 10M samples as a safety limit against malicious input.
+        let capped = sample_count.min(10_000_000);
         return Ok(vec![sample_size; capped]);
     }
 
