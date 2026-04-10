@@ -9,7 +9,7 @@ use cdn_config::{load_cdn_config, BootstrapConfig, LiveConfig, NodeConfig};
 use cdn_middleware::cc::CcEngine;
 use cdn_middleware::waf::WafEngine;
 use cdn_proxy::admin::purge::PurgeTaskTracker;
-use cdn_proxy::admin::{admin_router, AdminState};
+use cdn_proxy::admin::AdminState;
 use cdn_proxy::balancer::DynamicBalancer;
 use cdn_proxy::dns::DnsResolver;
 use cdn_proxy::health::HealthChecker;
@@ -303,6 +303,7 @@ fn main() {
         default_image_optimization: node_config.image_optimization.clone(),
         prefetch_worker,
         node_id: Arc::from(node_config.node.id.as_str()),
+        admin_state: Arc::clone(&admin_state),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
@@ -316,12 +317,6 @@ fn main() {
 
     // ── 8. Background services ──
 
-    // Admin API on 127.0.0.1:8080
-    let admin_bg = {
-        let admin_state = Arc::clone(&admin_state);
-        background_service("admin api", AdminBgService { state: admin_state })
-    };
-
     // etcd watch loop for live config updates
     let etcd_bg = {
         let mgr = Arc::clone(&etcd_manager);
@@ -332,7 +327,6 @@ fn main() {
     server.add_service(background);
     server.add_service(proxy_service);
     server.add_service(prometheus_service);
-    server.add_service(admin_bg);
     server.add_service(etcd_bg);
     server.add_service(health_probe_bg);
 
@@ -345,33 +339,6 @@ fn main() {
 use async_trait::async_trait;
 use pingora::server::ShutdownWatch;
 use pingora::services::background::BackgroundService;
-
-struct AdminBgService {
-    state: Arc<AdminState>,
-}
-
-#[async_trait]
-impl BackgroundService for AdminBgService {
-    async fn start(&self, mut shutdown: ShutdownWatch) {
-        let state = Arc::clone(&self.state);
-        let app = admin_router(state);
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:8080").await {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("[Admin] failed to bind 127.0.0.1:8080: {}", e);
-                return;
-            }
-        };
-        log::info!("[Admin] API listening on 127.0.0.1:8080");
-        let graceful = axum::serve(listener, app).with_graceful_shutdown(async move {
-            let _ = shutdown.changed().await;
-            log::info!("[Admin] shutting down");
-        });
-        if let Err(e) = graceful.await {
-            log::error!("[Admin] server error: {}", e);
-        }
-    }
-}
 
 struct EtcdWatchBgService {
     manager: Arc<cdn_config::EtcdConfigManager>,

@@ -100,7 +100,7 @@ docker compose --profile dev up
 ```
 
 The proxy listens on `0.0.0.0:6188` (HTTP) and metrics on `0.0.0.0:6190` (Prometheus).
-Admin API runs on `127.0.0.1:8080` (localhost only).
+Admin API is served on the proxy port under `/_admin/` prefix (Bearer token auth required, configured via etcd `{prefix}/global/security` `admin_token`).
 
 ## Configuration
 

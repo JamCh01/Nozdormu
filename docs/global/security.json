@@ -24,6 +24,6 @@
     "192.168.0.0/16"
   ],
 
-  "_admin_token": "Admin API 的 Bearer Token 认证，为 null 时不启用认证（仅限 localhost 访问）",
+  "_admin_token": "Admin API 的 Bearer Token 认证（必填），管理 API 通过代理端口 /_admin/ 路径对外暴露，需要此 token 进行认证。为 null 时管理 API 返回 403",
   "admin_token": "my_admin_bearer_token"
 }

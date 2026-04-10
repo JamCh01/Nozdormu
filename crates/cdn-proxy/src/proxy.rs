@@ -70,6 +70,7 @@ pub struct CdnProxy {
     pub default_image_optimization: cdn_common::ImageOptimizationConfig,
     pub prefetch_worker: Arc<cdn_streaming::prefetch::PrefetchWorker>,
     pub node_id: Arc<str>,
+    pub admin_state: Arc<crate::admin::AdminState>,
 }
 
 #[async_trait]
@@ -102,7 +103,12 @@ impl ProxyHttp for CdnProxy {
             return self.serve_not_found(session).await;
         }
 
-        // ── 3. Internal endpoints (IP restricted) ──
+        // ── 3. Admin API (public, Bearer token auth) ──
+        if path.starts_with("/_admin/") {
+            return self.handle_admin_request(session).await;
+        }
+
+        // ── 4. Internal endpoints (IP restricted) ──
         if matches!(path, "/health/detail" | "/status") {
             let remote = session
                 .client_addr()
@@ -1490,6 +1496,137 @@ impl ProxyHttp for CdnProxy {
             e
         );
         e
+    }
+}
+
+// ── Admin API handler ──
+
+impl CdnProxy {
+    /// Handle admin API requests under /_admin/ prefix.
+    /// Validates Bearer token auth, dispatches to handler, writes JSON response.
+    async fn handle_admin_request(&self, session: &mut Session) -> Result<bool> {
+        // Auth check: require valid Bearer token
+        let token_valid = if let Some(ref expected) = self.admin_state.admin_token {
+            let auth = session
+                .req_header()
+                .headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|h| h.strip_prefix("Bearer "));
+            match auth {
+                Some(t) => {
+                    crate::admin::endpoints::constant_time_eq(t.as_bytes(), expected.as_bytes())
+                }
+                None => false,
+            }
+        } else {
+            // No token configured = admin API disabled on public port
+            false
+        };
+        if !token_valid {
+            return self
+                .serve_json(
+                    session,
+                    401,
+                    serde_json::json!({"status": "error", "message": "unauthorized"}),
+                )
+                .await;
+        }
+
+        let path = session.req_header().uri.path().to_string();
+        let method = session.req_header().method.as_str().to_string();
+        let sub_path = path.strip_prefix("/_admin").unwrap_or(&path);
+
+        let (status, body) = match (method.as_str(), sub_path) {
+            ("POST", "/reload") => crate::admin::endpoints::reload_config(&self.admin_state).await,
+            ("POST", "/ssl/clear-cache") => {
+                crate::admin::endpoints::clear_ssl_cache(&self.admin_state).await
+            }
+            ("GET", p) if p.starts_with("/site/") => {
+                let id = &p[6..];
+                crate::admin::endpoints::get_site_config(&self.admin_state, id).await
+            }
+            ("GET", "/upstream/health") => {
+                crate::admin::endpoints::get_upstream_health(&self.admin_state).await
+            }
+            ("PUT", p) if p.starts_with("/upstream/health/") => {
+                // Parse /upstream/health/{site_id}/{origin_id}
+                let rest = &p[17..]; // strip "/upstream/health/"
+                match rest.split_once('/') {
+                    Some((site_id, origin_id)) if !site_id.is_empty() && !origin_id.is_empty() => {
+                        let req_body = self.read_request_body(session).await;
+                        crate::admin::endpoints::set_upstream_health(
+                            &self.admin_state,
+                            site_id,
+                            origin_id,
+                            &req_body,
+                        )
+                        .await
+                    }
+                    _ => (
+                        400,
+                        serde_json::json!({"status": "error", "message": "invalid path, expected /upstream/health/{site_id}/{origin_id}"}),
+                    ),
+                }
+            }
+            ("GET", "/cc/blocked") => {
+                crate::admin::endpoints::get_cc_blocked(&self.admin_state).await
+            }
+            ("POST", "/cache/purge") => {
+                let req_body = self.read_request_body(session).await;
+                crate::admin::endpoints::purge_cache(&self.admin_state, &req_body).await
+            }
+            ("GET", p) if p.starts_with("/cache/purge/status/") => {
+                let task_id = &p[20..]; // strip "/cache/purge/status/"
+                crate::admin::endpoints::purge_status(&self.admin_state, task_id).await
+            }
+            ("GET", "/cache/purge/status") => {
+                crate::admin::endpoints::purge_list_tasks(&self.admin_state).await
+            }
+            _ => (
+                404,
+                serde_json::json!({"status": "error", "message": "not found"}),
+            ),
+        };
+
+        self.serve_json(session, status, body).await
+    }
+
+    /// Write a JSON response with the given status code.
+    async fn serve_json(
+        &self,
+        session: &mut Session,
+        status: u16,
+        body: serde_json::Value,
+    ) -> Result<bool> {
+        let json = serde_json::to_string(&body).unwrap_or_default();
+        let mut header = ResponseHeader::build(status, None)?;
+        header.insert_header("Content-Type", "application/json")?;
+        header.insert_header("Content-Length", &json.len().to_string())?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session.write_response_body(Some(json.into()), true).await?;
+        Ok(true)
+    }
+
+    /// Read the full request body from the downstream session.
+    async fn read_request_body(&self, session: &mut Session) -> Vec<u8> {
+        let mut body = Vec::new();
+        loop {
+            match session.read_request_body().await {
+                Ok(Some(bytes)) => {
+                    body.extend_from_slice(&bytes);
+                    if body.len() > 1_048_576 {
+                        // 1MB limit for admin API bodies
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        body
     }
 }
 

@@ -21,7 +21,7 @@
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
 - **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
-- **管理 API** -- 配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；Bearer Token 认证，常量时间比较
+- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）
 
 ## 架构
 
@@ -120,16 +120,19 @@ curl http://localhost:6188/health
 # Prometheus 指标
 curl http://localhost:6190/metrics
 
-# 管理 API（仅限本机）
-curl http://localhost:8080/upstream/health
+# 管理 API（Bearer Token 认证，token 来自 etcd global/security）
+curl -H "Authorization: Bearer my_admin_bearer_token" \
+  http://localhost:6188/_admin/upstream/health
 
 # 缓存清除（精确 URL）
-curl -X POST http://localhost:8080/cache/purge \
+curl -X POST http://localhost:6188/_admin/cache/purge \
+  -H "Authorization: Bearer my_admin_bearer_token" \
   -H "Content-Type: application/json" \
   -d '{"type":"url","site_id":"example","host":"example.com","path":"/logo.png"}'
 
 # 缓存清除（全站，异步）
-curl -X POST http://localhost:8080/cache/purge \
+curl -X POST http://localhost:6188/_admin/cache/purge \
+  -H "Authorization: Bearer my_admin_bearer_token" \
   -H "Content-Type: application/json" \
   -d '{"type":"site","site_id":"example"}'
 
@@ -294,7 +297,8 @@ etcdctl put /nozdormu/global/redis '{
 配置变更通过 etcd watch 自动生效（无需重启）。也可通过管理 API 手动重载：
 
 ```bash
-curl -X POST http://localhost:8080/reload
+curl -X POST http://localhost:6188/_admin/reload \
+  -H "Authorization: Bearer my_admin_bearer_token"
 ```
 
 详见 [`docs/global/`](docs/global/) 全局配置示例和 [`docs/site/`](docs/site/) 站点配置示例。
@@ -303,9 +307,8 @@ curl -X POST http://localhost:8080/reload
 
 | 端口 | 服务 |
 |------|------|
-| 6188 | HTTP 代理 |
+| 6188 | HTTP 代理 + 管理 API（`/_admin/` 路径，Bearer Token 认证） |
 | 6190 | Prometheus 指标 |
-| 8080 | 管理 API（仅限本机） |
 
 ## 开发
 
