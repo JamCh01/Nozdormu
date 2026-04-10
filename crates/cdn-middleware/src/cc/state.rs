@@ -49,6 +49,12 @@ pub struct CcState {
     counters: Cache<String, TtlValue<Arc<AtomicU64>>>,
 }
 
+impl Default for CcState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CcState {
     pub fn new() -> Self {
         let blocked = Cache::builder()

@@ -10,6 +10,12 @@ pub struct ChallengeStore {
     challenges: Arc<DashMap<String, String>>,
 }
 
+impl Default for ChallengeStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChallengeStore {
     pub fn new() -> Self {
         Self {

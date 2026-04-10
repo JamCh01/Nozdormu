@@ -16,16 +16,9 @@ pub enum AuthError {
     MalformedUrl,
 }
 
-/// Constant-time byte slice comparison to prevent timing attacks.
+/// Constant-time byte slice comparison (delegates to cdn-common).
 pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    cdn_common::constant_time_eq(a, b)
 }
 
 /// Validate a request URL against the site's auth config.

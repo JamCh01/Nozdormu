@@ -9,6 +9,12 @@ pub struct DnsResolver {
     resolver: hickory_resolver::TokioAsyncResolver,
 }
 
+impl Default for DnsResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DnsResolver {
     pub fn new() -> Self {
         let cache = Cache::builder()

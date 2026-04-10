@@ -121,10 +121,10 @@ impl AcmeClient {
     /// Tries each provider in order until one succeeds.
     /// Returns (cert_pem, key_pem, chain_pem, provider_name).
     ///
-    /// NOTE: Actual ACME protocol implementation requires:
-    /// - instant-acme crate for protocol handling
-    /// - ChallengeStore for HTTP-01 token serving
-    /// - etcd for distributed locking and account storage
+    /// NOTE: Actual ACME protocol implementation requires
+    /// instant-acme crate for protocol handling,
+    /// ChallengeStore for HTTP-01 token serving,
+    /// and etcd for distributed locking and account storage.
     /// These will be wired in when infrastructure is available.
     pub async fn issue(&self, _domains: &[String]) -> Result<IssuedCert, AcmeError> {
         for provider in &self.providers {

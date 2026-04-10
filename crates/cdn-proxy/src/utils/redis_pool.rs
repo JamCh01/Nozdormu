@@ -182,7 +182,7 @@ impl RedisPool {
         let description = if url.contains('@') {
             format!(
                 "standalone:redis://***@{}",
-                url.split('@').last().unwrap_or("")
+                url.split('@').next_back().unwrap_or("")
             )
         } else {
             format!("standalone:{}", url)

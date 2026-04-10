@@ -46,7 +46,7 @@ pub fn generate_cache_key(
             }
             // Lowercase header name for case-insensitive matching
             for &b in k.as_bytes() {
-                hasher.update(&[b.to_ascii_lowercase()]);
+                hasher.update([b.to_ascii_lowercase()]);
             }
             hasher.update(b"=");
             hasher.update(v.as_bytes());

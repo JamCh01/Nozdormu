@@ -114,10 +114,7 @@ impl ProxyHttp for CdnProxy {
                 .client_addr()
                 .and_then(|a| a.as_inet())
                 .map(|a| a.ip());
-            if !remote
-                .map(|ip| crate::utils::ip::is_private_ip(ip))
-                .unwrap_or(false)
-            {
+            if !remote.map(crate::utils::ip::is_private_ip).unwrap_or(false) {
                 return self.serve_forbidden(session).await;
             }
             if path == "/health/detail" {
@@ -832,16 +829,13 @@ impl ProxyHttp for CdnProxy {
         }
 
         // Protocol-specific response headers
-        match &ctx.protocol_type {
-            ProtocolType::Sse => {
-                upstream_response
-                    .insert_header("X-Accel-Buffering", "no")
-                    .ok();
-                upstream_response
-                    .insert_header("Cache-Control", "no-cache")
-                    .ok();
-            }
-            _ => {}
+        if ctx.protocol_type == ProtocolType::Sse {
+            upstream_response
+                .insert_header("X-Accel-Buffering", "no")
+                .ok();
+            upstream_response
+                .insert_header("Cache-Control", "no-cache")
+                .ok();
         }
 
         // ── Range response handling ──
@@ -953,7 +947,7 @@ impl ProxyHttp for CdnProxy {
                 .as_ref()
                 .filter(|s| s.image_optimization.enabled)
                 .map(|s| &s.image_optimization)
-                .or_else(|| {
+                .or({
                     if self.default_image_optimization.enabled {
                         Some(&self.default_image_optimization)
                     } else {
@@ -1032,7 +1026,7 @@ impl ProxyHttp for CdnProxy {
                     .as_ref()
                     .filter(|s| s.compression.enabled)
                     .map(|s| &s.compression)
-                    .or_else(|| {
+                    .or({
                         if self.default_compression.enabled {
                             Some(&self.default_compression)
                         } else {
@@ -1612,7 +1606,7 @@ impl CdnProxy {
         let json = serde_json::to_string(&body).unwrap_or_default();
         let mut header = ResponseHeader::build(status, None)?;
         header.insert_header("Content-Type", "application/json")?;
-        header.insert_header("Content-Length", &json.len().to_string())?;
+        header.insert_header("Content-Length", json.len().to_string())?;
         session
             .write_response_header(Box::new(header), false)
             .await?;
@@ -1644,7 +1638,7 @@ impl CdnProxy {
         let spec = include_str!("../../../docs/openapi.json");
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "application/json")?;
-        header.insert_header("Content-Length", &spec.len().to_string())?;
+        header.insert_header("Content-Length", spec.len().to_string())?;
         header.insert_header("Cache-Control", "public, max-age=3600")?;
         header.insert_header("Access-Control-Allow-Origin", "*")?;
         session
@@ -1678,7 +1672,7 @@ impl CdnProxy {
 </html>"#;
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "text/html; charset=utf-8")?;
-        header.insert_header("Content-Length", &html.len().to_string())?;
+        header.insert_header("Content-Length", html.len().to_string())?;
         header.insert_header("Cache-Control", "public, max-age=3600")?;
         session
             .write_response_header(Box::new(header), false)
@@ -1717,7 +1711,7 @@ impl CdnProxy {
     async fn serve_acme_challenge(&self, session: &mut Session, key_auth: &str) -> Result<bool> {
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        header.insert_header("Content-Length", &key_auth.len().to_string())?;
+        header.insert_header("Content-Length", key_auth.len().to_string())?;
         session
             .write_response_header(Box::new(header), false)
             .await?;
@@ -1817,7 +1811,7 @@ impl CdnProxy {
     ) -> Result<bool> {
         let mut header = ResponseHeader::build(429, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        header.insert_header("Retry-After", &retry_after.to_string())?;
+        header.insert_header("Retry-After", retry_after.to_string())?;
         session
             .write_response_header(Box::new(header), false)
             .await?;
@@ -1832,7 +1826,7 @@ impl CdnProxy {
         let html = ChallengeManager::challenge_html(cookie_value);
         let mut header = ResponseHeader::build(503, None)?;
         header.insert_header("Content-Type", "text/html; charset=utf-8")?;
-        header.insert_header("Content-Length", &html.len().to_string())?;
+        header.insert_header("Content-Length", html.len().to_string())?;
         header.insert_header("Cache-Control", "no-store")?;
         session
             .write_response_header(Box::new(header), false)

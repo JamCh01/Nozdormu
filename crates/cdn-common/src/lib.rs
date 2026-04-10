@@ -16,3 +16,17 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     }
     s
 }
+
+/// Constant-time byte slice comparison to prevent timing attacks.
+/// Uses XOR accumulation — the comparison always examines every byte
+/// regardless of where the first difference occurs.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}

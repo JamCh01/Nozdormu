@@ -26,25 +26,21 @@ impl DistributedLock {
 
     /// Release the lock. Returns true if this owner held it.
     pub async fn release(&self, pool: &RedisPool) -> bool {
-        match pool
-            .eval_script(Self::release_script(), &[&self.key], &[&self.owner])
-            .await
-        {
-            Ok(redis::Value::Int(1)) => true,
-            _ => false,
-        }
+        matches!(
+            pool.eval_script(Self::release_script(), &[&self.key], &[&self.owner])
+                .await,
+            Ok(redis::Value::Int(1))
+        )
     }
 
     /// Renew the lock TTL. Returns true if renewed.
     pub async fn renew(&self, pool: &RedisPool) -> bool {
         let ttl_str = self.ttl_secs.to_string();
-        match pool
-            .eval_script(Self::renew_script(), &[&self.key], &[&self.owner, &ttl_str])
-            .await
-        {
-            Ok(redis::Value::Int(1)) => true,
-            _ => false,
-        }
+        matches!(
+            pool.eval_script(Self::renew_script(), &[&self.key], &[&self.owner, &ttl_str])
+                .await,
+            Ok(redis::Value::Int(1))
+        )
     }
 
     /// Retry acquiring the lock with delay between attempts.

@@ -14,6 +14,12 @@ pub struct VariableContext {
     vars: HashMap<String, String>,
 }
 
+impl Default for VariableContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VariableContext {
     pub fn new() -> Self {
         Self {

@@ -26,10 +26,8 @@ pub fn detect_protocol(session: &Session, config: &ProtocolConfig) -> ProtocolTy
     }
 
     // ── 2. WebSocket detection ──
-    if config.websocket.enable {
-        if is_websocket_upgrade(session) {
-            return ProtocolType::WebSocket;
-        }
+    if config.websocket.enable && is_websocket_upgrade(session) {
+        return ProtocolType::WebSocket;
     }
 
     // ── 3. SSE detection ──

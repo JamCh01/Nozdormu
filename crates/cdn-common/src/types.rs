@@ -233,28 +233,16 @@ impl Default for ForceHttpsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WebSocketConfig {
     #[serde(default)]
     pub enable: bool,
 }
 
-impl Default for WebSocketConfig {
-    fn default() -> Self {
-        Self { enable: false }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SseConfig {
     #[serde(default)]
     pub enable: bool,
-}
-
-impl Default for SseConfig {
-    fn default() -> Self {
-        Self { enable: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

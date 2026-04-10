@@ -27,9 +27,9 @@ pub struct AdminState {
     pub purge_tracker: Arc<PurgeTaskTracker>,
 }
 
-/// Constant-time byte comparison using ring.
+/// Constant-time byte comparison (re-export from cdn-common).
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    ring::constant_time::verify_slices_are_equal(a, b).is_ok()
+    cdn_common::constant_time_eq(a, b)
 }
 
 /// POST /_admin/reload — Trigger config reload from etcd.

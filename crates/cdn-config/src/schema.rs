@@ -151,8 +151,7 @@ pub fn validate_domain(domain: &str) -> Result<(), String> {
     }
 
     // No multiple wildcards (e.g., *.*.example.com)
-    if domain.starts_with("*.") {
-        let remainder = &domain[2..];
+    if let Some(remainder) = domain.strip_prefix("*.") {
         if remainder.is_empty() {
             return Err("wildcard domain must have a suffix after *.".to_string());
         }

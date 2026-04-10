@@ -94,8 +94,7 @@ pub fn check_url_rules(
                 }
             }
             UrlRuleType::Prefix => {
-                if match_input.starts_with(source) {
-                    let remainder = &match_input[source.len()..];
+                if let Some(remainder) = match_input.strip_prefix(source) {
                     let captures = vec![remainder.to_string()];
                     let target = substitute_variables(&rule.target, req, &captures);
                     let target =
