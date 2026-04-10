@@ -1505,7 +1505,17 @@ impl CdnProxy {
     /// Handle admin API requests under /_admin/ prefix.
     /// Validates Bearer token auth, dispatches to handler, writes JSON response.
     async fn handle_admin_request(&self, session: &mut Session) -> Result<bool> {
-        // Auth check: require valid Bearer token
+        let path = session.req_header().uri.path();
+
+        // ── Public endpoints (no auth required) ──
+        if path == "/_admin/openapi.json" {
+            return self.serve_openapi_spec(session).await;
+        }
+        if path == "/_admin/swagger" {
+            return self.serve_swagger_ui(session).await;
+        }
+
+        // ── Auth check: require valid Bearer token ──
         let token_valid = if let Some(ref expected) = self.admin_state.admin_token {
             let auth = session
                 .req_header()
@@ -1627,6 +1637,54 @@ impl CdnProxy {
             }
         }
         body
+    }
+
+    /// Serve the OpenAPI 3.1 specification as JSON.
+    async fn serve_openapi_spec(&self, session: &mut Session) -> Result<bool> {
+        let spec = include_str!("../../../docs/openapi.json");
+        let mut header = ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "application/json")?;
+        header.insert_header("Content-Length", &spec.len().to_string())?;
+        header.insert_header("Cache-Control", "public, max-age=3600")?;
+        header.insert_header("Access-Control-Allow-Origin", "*")?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session.write_response_body(Some(spec.into()), true).await?;
+        Ok(true)
+    }
+
+    /// Serve a minimal Swagger UI page that loads the OpenAPI spec.
+    async fn serve_swagger_ui(&self, session: &mut Session) -> Result<bool> {
+        let html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Nozdormu CDN — Admin API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: '/_admin/openapi.json',
+      dom_id: '#swagger-ui',
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: 'BaseLayout',
+    });
+  </script>
+</body>
+</html>"#;
+        let mut header = ResponseHeader::build(200, None)?;
+        header.insert_header("Content-Type", "text/html; charset=utf-8")?;
+        header.insert_header("Content-Length", &html.len().to_string())?;
+        header.insert_header("Cache-Control", "public, max-age=3600")?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session.write_response_body(Some(html.into()), true).await?;
+        Ok(true)
     }
 }
 

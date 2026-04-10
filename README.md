@@ -21,7 +21,7 @@
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
 - **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
-- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）
+- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
 
 ## 架构
 
@@ -120,6 +120,12 @@ curl http://localhost:6188/health
 
 # Prometheus 指标
 curl http://localhost:6190/metrics
+
+# OpenAPI 规范（无需认证）
+curl http://localhost:6188/_admin/openapi.json
+
+# Swagger UI（浏览器打开）
+# http://localhost:6188/_admin/swagger
 
 # 管理 API（Bearer Token 认证，token 来自 etcd global/security）
 curl -H "Authorization: Bearer my_admin_bearer_token" \

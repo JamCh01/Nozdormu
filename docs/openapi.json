@@ -1,0 +1,520 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nozdormu CDN Admin API",
+    "description": "Management API for the Nozdormu CDN reverse proxy. All endpoints are served on the proxy port under the `/_admin/` prefix and require Bearer token authentication configured via etcd `{prefix}/global/security`.",
+    "version": "0.1.0",
+    "contact": {
+      "name": "Nozdormu CDN"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:6188/_admin",
+      "description": "Local development"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/reload": {
+      "post": {
+        "operationId": "reloadConfig",
+        "summary": "Reload configuration",
+        "description": "Trigger a full configuration reload from etcd. Returns the new revision number and loaded site count.",
+        "tags": ["Config"],
+        "responses": {
+          "200": {
+            "description": "Configuration reloaded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "message": { "type": "string" },
+                    "revision": { "type": "integer", "format": "int64" },
+                    "sites_loaded": { "type": "integer" }
+                  },
+                  "required": ["status", "message", "revision", "sites_loaded"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Reload failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/ssl/clear-cache": {
+      "post": {
+        "operationId": "clearSslCache",
+        "summary": "Clear SSL certificate cache",
+        "description": "Clears the in-memory SSL certificate cache, forcing re-reads from storage on next TLS handshake.",
+        "tags": ["SSL"],
+        "responses": {
+          "200": {
+            "description": "SSL cache cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "message": { "type": "string" }
+                  },
+                  "required": ["status", "message"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/site/{id}": {
+      "get": {
+        "operationId": "getSiteConfig",
+        "summary": "Get site configuration summary",
+        "description": "Returns a summary of the specified site's configuration including enabled features.",
+        "tags": ["Sites"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Site configuration summary",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SiteConfigSummary" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/upstream/health": {
+      "get": {
+        "operationId": "getUpstreamHealth",
+        "summary": "Get upstream health status",
+        "description": "Returns health status for every origin across all configured sites, including active/passive check results.",
+        "tags": ["Upstream"],
+        "responses": {
+          "200": {
+            "description": "Upstream health data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "origins": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/OriginHealth" }
+                    }
+                  },
+                  "required": ["origins"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/upstream/health/{site_id}/{origin_id}": {
+      "put": {
+        "operationId": "setUpstreamHealth",
+        "summary": "Override origin health status",
+        "description": "Manually set the health status of a specific origin. Useful for maintenance windows or emergency failover.",
+        "tags": ["Upstream"],
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site identifier"
+          },
+          {
+            "name": "origin_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Origin identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "healthy": { "type": "boolean", "description": "Target health status" }
+                },
+                "required": ["healthy"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Health status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "site_id": { "type": "string" },
+                    "origin_id": { "type": "string" },
+                    "healthy": { "type": "boolean" }
+                  },
+                  "required": ["status", "site_id", "origin_id", "healthy"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or path",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cc/blocked": {
+      "get": {
+        "operationId": "getCcBlocked",
+        "summary": "List CC-blocked IPs",
+        "description": "Returns currently blocked IPs from the CC rate limiter. Note: currently returns an empty list as moka Cache does not support iteration.",
+        "tags": ["CC"],
+        "responses": {
+          "200": {
+            "description": "Blocked IP list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "blocked": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "note": { "type": "string" }
+                  },
+                  "required": ["blocked"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/purge": {
+      "post": {
+        "operationId": "purgeCache",
+        "summary": "Purge cache entries",
+        "description": "Purge by exact URL (synchronous) or by entire site (asynchronous background task). The request body `type` field determines the variant.",
+        "tags": ["Cache"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/PurgeUrlRequest" },
+                  { "$ref": "#/components/schemas/PurgeSiteRequest" }
+                ],
+                "discriminator": {
+                  "propertyName": "type",
+                  "mapping": {
+                    "url": "#/components/schemas/PurgeUrlRequest",
+                    "site": "#/components/schemas/PurgeSiteRequest"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "URL purge completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "purge_type": { "type": "string", "enum": ["url"] },
+                    "site_id": { "type": "string" },
+                    "cache_key": { "type": "string" },
+                    "keys_deleted": { "type": "integer" }
+                  },
+                  "required": ["status", "purge_type", "site_id", "cache_key", "keys_deleted"]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Site purge accepted (running in background)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["accepted"] },
+                    "purge_type": { "type": "string", "enum": ["site"] },
+                    "site_id": { "type": "string" },
+                    "task_id": { "type": "string", "format": "uuid" }
+                  },
+                  "required": ["status", "purge_type", "site_id", "task_id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (bad body, invalid site_id, invalid host/path)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "A purge is already running for this site",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Purge operation failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/purge/status/{task_id}": {
+      "get": {
+        "operationId": "getPurgeStatus",
+        "summary": "Get purge task status",
+        "description": "Returns the status of a background site-purge task by its task ID (UUID returned in the 202 response).",
+        "tags": ["Cache"],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Purge task ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Purge task status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PurgeTaskStatus" }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found (may have been auto-evicted after 1 hour)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cache/purge/status": {
+      "get": {
+        "operationId": "listPurgeTasks",
+        "summary": "List all purge tasks",
+        "description": "Returns all tracked purge tasks. Completed tasks are auto-evicted after 1 hour.",
+        "tags": ["Cache"],
+        "responses": {
+          "200": {
+            "description": "List of purge tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/PurgeTaskStatus" }
+                    }
+                  },
+                  "required": ["tasks"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Admin API token configured in etcd `{prefix}/global/security` `admin_token` field"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid Bearer token",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["error"] },
+          "message": { "type": "string" }
+        },
+        "required": ["status", "message"]
+      },
+      "SiteConfigSummary": {
+        "type": "object",
+        "properties": {
+          "site_id": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "domains": { "type": "array", "items": { "type": "string" } },
+          "origins_count": { "type": "integer" },
+          "waf_enabled": { "type": "boolean" },
+          "cc_enabled": { "type": "boolean" },
+          "cache_enabled": { "type": "boolean" }
+        },
+        "required": ["site_id", "enabled", "domains", "origins_count", "waf_enabled", "cc_enabled", "cache_enabled"]
+      },
+      "OriginHealth": {
+        "type": "object",
+        "properties": {
+          "site_id": { "type": "string" },
+          "origin_id": { "type": "string" },
+          "host": { "type": "string" },
+          "port": { "type": "integer" },
+          "healthy": { "type": "boolean" },
+          "backup": { "type": "boolean" },
+          "enabled": { "type": "boolean" },
+          "consecutive_successes": { "type": "integer" },
+          "consecutive_failures": { "type": "integer" },
+          "last_check_time": { "type": ["integer", "null"], "description": "Unix epoch seconds" },
+          "last_check_success": { "type": ["boolean", "null"] }
+        },
+        "required": ["site_id", "origin_id", "host", "port", "healthy", "backup", "enabled", "consecutive_successes", "consecutive_failures"]
+      },
+      "PurgeUrlRequest": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["url"] },
+          "site_id": { "type": "string" },
+          "host": { "type": "string" },
+          "path": { "type": "string" },
+          "query_string": { "type": ["string", "null"] },
+          "sort_query_string": { "type": "boolean", "default": false },
+          "vary_headers": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                { "type": "string" },
+                { "type": "string" }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "default": []
+          }
+        },
+        "required": ["type", "site_id", "host", "path"]
+      },
+      "PurgeSiteRequest": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["site"] },
+          "site_id": { "type": "string" }
+        },
+        "required": ["type", "site_id"]
+      },
+      "PurgeTaskStatus": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "format": "uuid" },
+          "site_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+          "keys_deleted": { "type": "integer", "format": "int64" },
+          "started_at": { "type": "integer", "format": "int64", "description": "Unix timestamp" },
+          "completed_at": { "type": ["integer", "null"], "format": "int64", "description": "Unix timestamp, omitted when null" },
+          "error": { "type": ["string", "null"], "description": "Error message, omitted when null" }
+        },
+        "required": ["task_id", "site_id", "status", "keys_deleted", "started_at"]
+      }
+    }
+  },
+  "tags": [
+    { "name": "Config", "description": "Configuration management" },
+    { "name": "SSL", "description": "SSL/TLS certificate management" },
+    { "name": "Sites", "description": "Site configuration queries" },
+    { "name": "Upstream", "description": "Upstream origin health management" },
+    { "name": "CC", "description": "CC rate limiting status" },
+    { "name": "Cache", "description": "Cache purge operations" }
+  ]
+}
