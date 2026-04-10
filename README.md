@@ -1,5 +1,7 @@
 # Nozdormu CDN
 
+[![CI](https://github.com/JamCh01/Nozdormu/actions/workflows/ci.yml/badge.svg)](https://github.com/JamCh01/Nozdormu/actions/workflows/ci.yml)
+
 基于 [Pingora](https://github.com/cloudflare/pingora) 构建的高性能 CDN 反向代理，旨在替代基于 OpenResty/Lua 的 CDN 系统。
 
 ## 功能特性
@@ -352,6 +354,22 @@ bash tests/e2e/teardown.sh
 ```
 
 详见 [CLAUDE.md](CLAUDE.md) 开发指南。
+
+### CI/CD
+
+项目使用 GitHub Actions 进行持续集成和发布：
+
+- **CI**（`push`/`PR` 到 `main`）：check → clippy → fmt → test → build release
+- **Release**（推送 `v*` tag）：构建 x86_64 + aarch64 Linux 二进制，创建 GitHub Release
+
+```bash
+# 发布新版本
+git tag v0.2.0
+git push origin v0.2.0
+# GitHub Actions 自动构建并创建 Release
+```
+
+也可从 [Releases](https://github.com/JamCh01/Nozdormu/releases) 页面下载预编译二进制。
 
 ## 许可证
 
