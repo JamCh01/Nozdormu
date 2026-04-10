@@ -1,7 +1,6 @@
 use once_cell::sync::Lazy;
 use prometheus::{
-    register_histogram_vec, register_int_counter_vec,
-    HistogramVec, IntCounterVec, IntGauge,
+    register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec, IntGauge,
 };
 
 // ── Counters ──
@@ -54,11 +53,8 @@ pub static REDIRECT_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 // ── Gauges ──
 
 pub static CONNECTIONS_ACTIVE: Lazy<IntGauge> = Lazy::new(|| {
-    prometheus::register_int_gauge!(
-        "cdn_connections_active",
-        "Currently active connections"
-    )
-    .unwrap()
+    prometheus::register_int_gauge!("cdn_connections_active", "Currently active connections")
+        .unwrap()
 });
 
 // ── Histograms ──
@@ -88,7 +84,14 @@ pub static RESPONSE_SIZE: Lazy<HistogramVec> = Lazy::new(|| {
         "cdn_response_size_bytes",
         "Response body size",
         &["site_id"],
-        vec![100.0, 1_000.0, 10_000.0, 100_000.0, 1_000_000.0, 10_000_000.0]
+        vec![
+            100.0,
+            1_000.0,
+            10_000.0,
+            100_000.0,
+            1_000_000.0,
+            10_000_000.0
+        ]
     )
     .unwrap()
 });

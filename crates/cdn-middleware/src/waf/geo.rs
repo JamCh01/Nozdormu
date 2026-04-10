@@ -128,9 +128,7 @@ impl GeoIpDb {
         if let Some(reader) = &self.asn {
             if let Ok(asn) = reader.lookup::<maxminddb::geoip2::Asn>(ip) {
                 info.asn = asn.autonomous_system_number;
-                info.asn_org = asn
-                    .autonomous_system_organization
-                    .map(|s| s.to_string());
+                info.asn_org = asn.autonomous_system_organization.map(|s| s.to_string());
             }
         }
 

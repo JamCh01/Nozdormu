@@ -45,7 +45,10 @@ impl ChallengeStore {
         }
         // Validate token: ACME tokens are base64url — only allow [A-Za-z0-9_-]
         // Reject '/', '.', and other characters to prevent key collision across domains
-        if !token.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        if !token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
             return None;
         }
         // Strip port from host
@@ -106,7 +109,9 @@ mod tests {
     fn test_get_by_path_invalid() {
         let store = ChallengeStore::new();
         assert!(store.get_by_path("example.com", "/other/path").is_none());
-        assert!(store.get_by_path("example.com", "/.well-known/acme-challenge/").is_none());
+        assert!(store
+            .get_by_path("example.com", "/.well-known/acme-challenge/")
+            .is_none());
     }
 
     #[test]
@@ -114,10 +119,16 @@ mod tests {
         let store = ChallengeStore::new();
         // Token with slash — could cause cross-domain key collision
         store.set_challenge("a/b", "tok", "secret");
-        assert!(store.get_by_path("a", "/.well-known/acme-challenge/b/tok").is_none());
+        assert!(store
+            .get_by_path("a", "/.well-known/acme-challenge/b/tok")
+            .is_none());
         // Token with dot-dot
-        assert!(store.get_by_path("example.com", "/.well-known/acme-challenge/../../../etc").is_none());
+        assert!(store
+            .get_by_path("example.com", "/.well-known/acme-challenge/../../../etc")
+            .is_none());
         // Token with dot
-        assert!(store.get_by_path("example.com", "/.well-known/acme-challenge/foo.bar").is_none());
+        assert!(store
+            .get_by_path("example.com", "/.well-known/acme-challenge/foo.bar")
+            .is_none());
     }
 }

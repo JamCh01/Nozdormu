@@ -1,10 +1,10 @@
 pub mod error;
-pub mod types;
 pub mod redis_trait;
+pub mod types;
 
 pub use error::{CdnError, CdnResult};
-pub use types::*;
 pub use redis_trait::RedisOps;
+pub use types::*;
 
 /// Zero-allocation hex encoding for byte slices.
 pub fn hex_encode(bytes: &[u8]) -> String {

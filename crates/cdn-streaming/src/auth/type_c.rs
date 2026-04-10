@@ -125,9 +125,18 @@ mod tests {
     #[test]
     fn test_malformed_url() {
         let config = make_config("key", 1800);
-        assert!(matches!(validate(&config, "/"), Err(AuthError::MalformedUrl)));
-        assert!(matches!(validate(&config, "/hash"), Err(AuthError::MalformedUrl)));
-        assert!(matches!(validate(&config, "/hash/123"), Err(AuthError::MalformedUrl)));
+        assert!(matches!(
+            validate(&config, "/"),
+            Err(AuthError::MalformedUrl)
+        ));
+        assert!(matches!(
+            validate(&config, "/hash"),
+            Err(AuthError::MalformedUrl)
+        ));
+        assert!(matches!(
+            validate(&config, "/hash/123"),
+            Err(AuthError::MalformedUrl)
+        ));
     }
 
     #[test]

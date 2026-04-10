@@ -68,7 +68,13 @@ impl CcState {
     pub async fn block_ip(&self, site_id: &str, ip: IpAddr, duration: Duration) {
         let key = block_key(site_id, ip);
         self.blocked
-            .insert(key, TtlValue { value: (), ttl: duration })
+            .insert(
+                key,
+                TtlValue {
+                    value: (),
+                    ttl: duration,
+                },
+            )
             .await;
     }
 
@@ -111,7 +117,13 @@ impl CcState {
 }
 
 fn block_key(site_id: &str, ip: IpAddr) -> String {
-    format!("{}\0{}", site_id, ip)
+    use std::fmt::Write;
+    // Pre-allocate: site_id + \0 + max IPv6 len (39) + margin
+    let mut key = String::with_capacity(site_id.len() + 1 + 45);
+    key.push_str(site_id);
+    key.push('\0');
+    let _ = write!(key, "{}", ip);
+    key
 }
 
 #[cfg(test)]

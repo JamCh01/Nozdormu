@@ -31,8 +31,7 @@ pub fn negotiate_format(
     }
 
     // 3. Fall back to original format
-    let original = format_from_content_type(original_content_type)
-        .unwrap_or(ImageFormat::Jpeg);
+    let original = format_from_content_type(original_content_type).unwrap_or(ImageFormat::Jpeg);
     (original, false)
 }
 
@@ -112,12 +111,7 @@ fn client_accepts(accepted: &[(&str, f32)], mime: &str) -> bool {
 
 /// Derive ImageFormat from a Content-Type string.
 fn format_from_content_type(ct: &str) -> Option<ImageFormat> {
-    let mime = ct
-        .split(';')
-        .next()
-        .unwrap_or(ct)
-        .trim()
-        .to_lowercase();
+    let mime = ct.split(';').next().unwrap_or(ct).trim().to_lowercase();
 
     match mime.as_str() {
         "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
@@ -165,12 +159,7 @@ mod tests {
     #[test]
     fn test_negotiate_webp_when_no_avif() {
         let config = default_config();
-        let (fmt, auto) = negotiate_format(
-            "image/webp,image/jpeg",
-            None,
-            &config,
-            "image/jpeg",
-        );
+        let (fmt, auto) = negotiate_format("image/webp,image/jpeg", None, &config, "image/jpeg");
         assert_eq!(fmt, ImageFormat::WebP);
         assert!(auto);
     }
@@ -178,12 +167,7 @@ mod tests {
     #[test]
     fn test_negotiate_fallback_to_original() {
         let config = default_config();
-        let (fmt, auto) = negotiate_format(
-            "image/jpeg",
-            None,
-            &config,
-            "image/png",
-        );
+        let (fmt, auto) = negotiate_format("image/jpeg", None, &config, "image/png");
         // Neither AVIF nor WebP accepted, fall back to original (PNG)
         assert_eq!(fmt, ImageFormat::Png);
         assert!(!auto);
@@ -192,12 +176,7 @@ mod tests {
     #[test]
     fn test_negotiate_wildcard_accepts_all() {
         let config = default_config();
-        let (fmt, auto) = negotiate_format(
-            "*/*",
-            None,
-            &config,
-            "image/jpeg",
-        );
+        let (fmt, auto) = negotiate_format("*/*", None, &config, "image/jpeg");
         // */* matches everything, so server priority wins (Avif)
         assert_eq!(fmt, ImageFormat::Avif);
         assert!(auto);
@@ -206,12 +185,7 @@ mod tests {
     #[test]
     fn test_negotiate_image_wildcard() {
         let config = default_config();
-        let (fmt, auto) = negotiate_format(
-            "image/*",
-            None,
-            &config,
-            "image/jpeg",
-        );
+        let (fmt, auto) = negotiate_format("image/*", None, &config, "image/jpeg");
         assert_eq!(fmt, ImageFormat::Avif);
         assert!(auto);
     }
@@ -220,12 +194,8 @@ mod tests {
     fn test_negotiate_q0_rejected() {
         let mut config = default_config();
         config.formats = vec![ImageFormat::WebP];
-        let (fmt, auto) = negotiate_format(
-            "image/webp;q=0,image/jpeg",
-            None,
-            &config,
-            "image/jpeg",
-        );
+        let (fmt, auto) =
+            negotiate_format("image/webp;q=0,image/jpeg", None, &config, "image/jpeg");
         // WebP has q=0, should be rejected
         assert_eq!(fmt, ImageFormat::Jpeg);
         assert!(!auto);
@@ -269,10 +239,22 @@ mod tests {
 
     #[test]
     fn test_format_from_content_type() {
-        assert_eq!(format_from_content_type("image/jpeg"), Some(ImageFormat::Jpeg));
-        assert_eq!(format_from_content_type("image/png"), Some(ImageFormat::Png));
-        assert_eq!(format_from_content_type("image/webp"), Some(ImageFormat::WebP));
-        assert_eq!(format_from_content_type("image/avif"), Some(ImageFormat::Avif));
+        assert_eq!(
+            format_from_content_type("image/jpeg"),
+            Some(ImageFormat::Jpeg)
+        );
+        assert_eq!(
+            format_from_content_type("image/png"),
+            Some(ImageFormat::Png)
+        );
+        assert_eq!(
+            format_from_content_type("image/webp"),
+            Some(ImageFormat::WebP)
+        );
+        assert_eq!(
+            format_from_content_type("image/avif"),
+            Some(ImageFormat::Avif)
+        );
         assert_eq!(format_from_content_type("image/gif"), None);
         assert_eq!(format_from_content_type("text/html"), None);
     }

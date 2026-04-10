@@ -37,7 +37,12 @@ impl OssClient {
     }
 
     /// PUT an object.
-    pub async fn put_object(&self, key: &str, body: Vec<u8>, content_type: &str) -> Result<(), OssError> {
+    pub async fn put_object(
+        &self,
+        key: &str,
+        body: Vec<u8>,
+        content_type: &str,
+    ) -> Result<(), OssError> {
         let url = self.object_url(key);
         let now = Utc::now();
         let date_str = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -63,10 +68,17 @@ impl OssClient {
 
         let canonical_uri = self.canonical_uri(key);
         let authorization = self.sign_v4(
-            "PUT", &canonical_uri, "", &headers, &content_hash, &date_str, &date_short,
+            "PUT",
+            &canonical_uri,
+            "",
+            &headers,
+            &content_hash,
+            &date_str,
+            &date_short,
         );
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .put(&url)
             .header("Host", &host)
             .header("X-Amz-Date", &date_str)
@@ -104,10 +116,17 @@ impl OssClient {
 
         let canonical_uri = self.canonical_uri(key);
         let authorization = self.sign_v4(
-            "GET", &canonical_uri, "", &headers, &content_hash, &date_str, &date_short,
+            "GET",
+            &canonical_uri,
+            "",
+            &headers,
+            &content_hash,
+            &date_str,
+            &date_short,
         );
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(&url)
             .header("Host", &host)
             .header("X-Amz-Date", &date_str)
@@ -156,10 +175,17 @@ impl OssClient {
 
         let canonical_uri = self.canonical_uri(key);
         let authorization = self.sign_v4(
-            "GET", &canonical_uri, "", &headers, &content_hash, &date_str, &date_short,
+            "GET",
+            &canonical_uri,
+            "",
+            &headers,
+            &content_hash,
+            &date_str,
+            &date_short,
         );
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(&url)
             .header("Host", &host)
             .header("Range", &range_value)
@@ -201,10 +227,17 @@ impl OssClient {
 
         let canonical_uri = self.canonical_uri(key);
         let authorization = self.sign_v4(
-            "DELETE", &canonical_uri, "", &headers, &content_hash, &date_str, &date_short,
+            "DELETE",
+            &canonical_uri,
+            "",
+            &headers,
+            &content_hash,
+            &date_str,
+            &date_short,
         );
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .delete(&url)
             .header("Host", &host)
             .header("X-Amz-Date", &date_str)
@@ -242,7 +275,10 @@ impl OssClient {
                 format!("max-keys={}", batch_size),
             ];
             if let Some(ref token) = continuation_token {
-                query_parts.push(format!("continuation-token={}", uri_encode_component(token)));
+                query_parts.push(format!(
+                    "continuation-token={}",
+                    uri_encode_component(token)
+                ));
             }
             query_parts.sort(); // canonical query must be sorted
             let canonical_query = query_parts.join("&");
@@ -265,8 +301,13 @@ impl OssClient {
             };
 
             let authorization = self.sign_v4(
-                "GET", &canonical_uri, &canonical_query, &headers,
-                &content_hash, &date_str, &date_short,
+                "GET",
+                &canonical_uri,
+                &canonical_query,
+                &headers,
+                &content_hash,
+                &date_str,
+                &date_short,
             );
 
             let scheme = if self.use_ssl { "https" } else { "http" };
@@ -276,12 +317,19 @@ impl OssClient {
                 .or_else(|| endpoint.strip_prefix("http://"))
                 .unwrap_or(endpoint);
             let url = if self.path_style {
-                format!("{}://{}/{}/?{}", scheme, host_part, self.bucket, canonical_query)
+                format!(
+                    "{}://{}/{}/?{}",
+                    scheme, host_part, self.bucket, canonical_query
+                )
             } else {
-                format!("{}://{}.{}/?{}", scheme, self.bucket, host_part, canonical_query)
+                format!(
+                    "{}://{}.{}/?{}",
+                    scheme, self.bucket, host_part, canonical_query
+                )
             };
 
-            let resp = self.http_client
+            let resp = self
+                .http_client
                 .get(&url)
                 .header("Host", &host)
                 .header("X-Amz-Date", &date_str)
@@ -297,7 +345,10 @@ impl OssClient {
                 return Err(OssError::Api(status, body));
             }
 
-            let body = resp.text().await.map_err(|e| OssError::Network(e.to_string()))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| OssError::Network(e.to_string()))?;
             let (keys, next_token) = parse_list_objects_v2(&body)?;
             all_keys.extend(keys);
 
@@ -346,8 +397,13 @@ impl OssClient {
             };
 
             let authorization = self.sign_v4(
-                "POST", &canonical_uri, canonical_query, &headers,
-                &content_hash, &date_str, &date_short,
+                "POST",
+                &canonical_uri,
+                canonical_query,
+                &headers,
+                &content_hash,
+                &date_str,
+                &date_short,
             );
 
             let scheme = if self.use_ssl { "https" } else { "http" };
@@ -362,7 +418,8 @@ impl OssClient {
                 format!("{}://{}.{}/?delete=", scheme, self.bucket, host_part)
             };
 
-            let resp = self.http_client
+            let resp = self
+                .http_client
                 .post(&url)
                 .header("Host", &host)
                 .header("X-Amz-Date", &date_str)
@@ -381,7 +438,10 @@ impl OssClient {
             }
 
             // Count deleted objects from response
-            let body = resp.text().await.map_err(|e| OssError::Network(e.to_string()))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| OssError::Network(e.to_string()))?;
             total_deleted += parse_delete_result_count(&body);
         }
 
@@ -410,13 +470,20 @@ impl OssClient {
 
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            method, canonical_uri, canonical_query, canonical_headers, signed_headers_str, content_hash
+            method,
+            canonical_uri,
+            canonical_query,
+            canonical_headers,
+            signed_headers_str,
+            content_hash
         );
 
         let scope = format!("{}/{}/s3/aws4_request", date_short, self.region);
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            date_str, scope, sha256_hex(canonical_request.as_bytes())
+            date_str,
+            scope,
+            sha256_hex(canonical_request.as_bytes())
         );
 
         // Derive signing key
@@ -498,21 +565,14 @@ impl std::fmt::Display for OssError {
 /// URI-encode a path for S3 requests (RFC 3986).
 /// Encodes each path segment individually, preserving `/` separators.
 fn uri_encode_path(path: &str) -> String {
-    path.split('/')
-        .map(|segment| {
-            segment
-                .bytes()
-                .map(|b| {
-                    if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
-                        format!("{}", b as char)
-                    } else {
-                        format!("%{:02X}", b)
-                    }
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut out = String::with_capacity(path.len() * 3);
+    for (i, segment) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        encode_component_into(segment, &mut out);
+    }
+    out
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
@@ -528,15 +588,21 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// URI-encode a single component (not a path — encodes `/` too).
 fn uri_encode_component(s: &str) -> String {
-    s.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
-                format!("{}", b as char)
-            } else {
-                format!("%{:02X}", b)
-            }
-        })
-        .collect()
+    let mut out = String::with_capacity(s.len() * 3);
+    encode_component_into(s, &mut out);
+    out
+}
+
+/// Shared encoder: appends percent-encoded bytes to an existing String.
+fn encode_component_into(s: &str, out: &mut String) {
+    use std::fmt::Write;
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            let _ = write!(out, "%{:02X}", b);
+        }
+    }
 }
 
 /// Parse S3 ListObjectsV2 XML response.
@@ -578,11 +644,13 @@ fn parse_list_objects_v2(xml: &str) -> Result<(Vec<String>, Option<String>), Oss
             }
             Ok(Event::Text(ref e)) => {
                 if in_key {
-                    let text = e.unescape()
+                    let text = e
+                        .unescape()
                         .map_err(|err| OssError::Xml(format!("XML unescape error: {}", err)))?;
                     keys.push(text.to_string());
                 } else if in_next_token {
-                    let text = e.unescape()
+                    let text = e
+                        .unescape()
                         .map_err(|err| OssError::Xml(format!("XML unescape error: {}", err)))?;
                     next_token = Some(text.to_string());
                 }
@@ -598,7 +666,8 @@ fn parse_list_objects_v2(xml: &str) -> Result<(Vec<String>, Option<String>), Oss
 
 /// Build XML body for S3 Multi-Object Delete request.
 fn build_delete_xml(keys: &[String]) -> String {
-    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Delete><Quiet>true</Quiet>");
+    let mut xml =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Delete><Quiet>true</Quiet>");
     for key in keys {
         xml.push_str("<Object><Key>");
         // Escape XML special characters in key
@@ -647,8 +716,13 @@ mod tests {
     #[test]
     fn test_path_style_url() {
         let client = OssClient::new(
-            "https://s3.amazonaws.com", "mybucket", "us-east-1",
-            "AKID", "SECRET", true, true,
+            "https://s3.amazonaws.com",
+            "mybucket",
+            "us-east-1",
+            "AKID",
+            "SECRET",
+            true,
+            true,
         );
         assert_eq!(
             client.object_url("cache/site1/ab/abcdef"),
@@ -659,8 +733,13 @@ mod tests {
     #[test]
     fn test_virtual_host_url() {
         let client = OssClient::new(
-            "https://s3.amazonaws.com", "mybucket", "us-east-1",
-            "AKID", "SECRET", true, false,
+            "https://s3.amazonaws.com",
+            "mybucket",
+            "us-east-1",
+            "AKID",
+            "SECRET",
+            true,
+            false,
         );
         assert_eq!(
             client.object_url("cache/site1/ab/abcdef"),
@@ -671,8 +750,13 @@ mod tests {
     #[test]
     fn test_host_path_style() {
         let client = OssClient::new(
-            "https://s3.amazonaws.com", "mybucket", "us-east-1",
-            "AKID", "SECRET", true, true,
+            "https://s3.amazonaws.com",
+            "mybucket",
+            "us-east-1",
+            "AKID",
+            "SECRET",
+            true,
+            true,
         );
         assert_eq!(client.host(), "s3.amazonaws.com");
     }
@@ -680,8 +764,13 @@ mod tests {
     #[test]
     fn test_host_virtual() {
         let client = OssClient::new(
-            "https://s3.amazonaws.com", "mybucket", "us-east-1",
-            "AKID", "SECRET", true, false,
+            "https://s3.amazonaws.com",
+            "mybucket",
+            "us-east-1",
+            "AKID",
+            "SECRET",
+            true,
+            false,
         );
         assert_eq!(client.host(), "mybucket.s3.amazonaws.com");
     }
@@ -689,7 +778,10 @@ mod tests {
     #[test]
     fn test_sha256_hex() {
         let hash = sha256_hex(b"");
-        assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -701,7 +793,10 @@ mod tests {
   <NextContinuationToken>token123</NextContinuationToken>
 </ListBucketResult>"#;
         let (keys, token) = parse_list_objects_v2(xml).unwrap();
-        assert_eq!(keys, vec!["cache/site1/ab/abcdef1234", "cache/site1/cd/cdef5678"]);
+        assert_eq!(
+            keys,
+            vec!["cache/site1/ab/abcdef1234", "cache/site1/cd/cdef5678"]
+        );
         assert_eq!(token, Some("token123".to_string()));
     }
 
@@ -727,7 +822,10 @@ mod tests {
 
     #[test]
     fn test_build_delete_xml() {
-        let keys = vec!["cache/site1/ab/abc".to_string(), "cache/site1/cd/def".to_string()];
+        let keys = vec![
+            "cache/site1/ab/abc".to_string(),
+            "cache/site1/cd/def".to_string(),
+        ];
         let xml = build_delete_xml(&keys);
         assert!(xml.contains("<Quiet>true</Quiet>"));
         assert!(xml.contains("<Key>cache/site1/ab/abc</Key>"));

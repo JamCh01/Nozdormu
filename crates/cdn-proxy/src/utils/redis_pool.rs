@@ -20,7 +20,10 @@ impl RedisPool {
             "standalone" => Self::connect_standalone(config).await,
             "sentinel" => Self::connect_sentinel(config).await,
             _ => {
-                log::warn!("[Redis] unknown mode '{}', running without Redis", config.redis.mode);
+                log::warn!(
+                    "[Redis] unknown mode '{}', running without Redis",
+                    config.redis.mode
+                );
                 Self::none()
             }
         }
@@ -148,7 +151,8 @@ impl RedisPool {
             if all_keys.len() >= MAX_KEYS {
                 log::warn!(
                     "[Redis] SCAN hit safety cap ({} keys) for pattern: {}",
-                    MAX_KEYS, pattern
+                    MAX_KEYS,
+                    pattern
                 );
                 break;
             }
@@ -176,7 +180,10 @@ impl RedisPool {
         };
 
         let description = if url.contains('@') {
-            format!("standalone:redis://***@{}", url.split('@').last().unwrap_or(""))
+            format!(
+                "standalone:redis://***@{}",
+                url.split('@').last().unwrap_or("")
+            )
         } else {
             format!("standalone:{}", url)
         };
@@ -185,16 +192,25 @@ impl RedisPool {
             Ok(client) => match client.get_connection_manager().await {
                 Ok(conn) => {
                     log::info!("[Redis] connected: {}", description);
-                    Self { conn: Some(conn), description }
+                    Self {
+                        conn: Some(conn),
+                        description,
+                    }
                 }
                 Err(e) => {
                     log::warn!("[Redis] connection failed ({}): {}", description, e);
-                    Self { conn: None, description }
+                    Self {
+                        conn: None,
+                        description,
+                    }
                 }
             },
             Err(e) => {
                 log::warn!("[Redis] client creation failed: {}", e);
-                Self { conn: None, description }
+                Self {
+                    conn: None,
+                    description,
+                }
             }
         }
     }
@@ -206,7 +222,10 @@ impl RedisPool {
 
         if sentinels.is_empty() {
             log::warn!("[Redis] sentinel mode but no nodes configured");
-            return Self { conn: None, description };
+            return Self {
+                conn: None,
+                description,
+            };
         }
 
         // Build sentinel connection info
@@ -221,10 +240,8 @@ impl RedisPool {
         };
 
         // Parse sentinel addresses as connection strings
-        let sentinel_urls: Vec<String> = sentinels
-            .iter()
-            .map(|s| format!("redis://{}", s))
-            .collect();
+        let sentinel_urls: Vec<String> =
+            sentinels.iter().map(|s| format!("redis://{}", s)).collect();
 
         match redis::sentinel::SentinelClient::build(
             sentinel_urls,
@@ -238,12 +255,16 @@ impl RedisPool {
                     Ok(_async_conn) => {
                         // We got a connection, but we need a ConnectionManager for auto-reconnect.
                         // Use the sentinel to discover master address, then connect directly.
-                        log::info!("[Redis] sentinel discovered master, connecting via ConnectionManager");
+                        log::info!(
+                            "[Redis] sentinel discovered master, connecting via ConnectionManager"
+                        );
 
                         // Discover master address via a fresh sentinel query
                         let sentinel_url = format!("redis://{}", sentinels[0]);
                         if let Ok(sentinel_client) = redis::Client::open(sentinel_url.as_str()) {
-                            if let Ok(mut sentinel_conn) = sentinel_client.get_multiplexed_async_connection().await {
+                            if let Ok(mut sentinel_conn) =
+                                sentinel_client.get_multiplexed_async_connection().await
+                            {
                                 let result: Result<(String, u16), _> = redis::cmd("SENTINEL")
                                     .arg("get-master-addr-by-name")
                                     .arg(master_name)
@@ -252,33 +273,58 @@ impl RedisPool {
 
                                 if let Ok((host, port)) = result {
                                     let master_url = if let Some(ref pw) = config.redis.password {
-                                        format!("redis://:{}@{}:{}/{}", pw, host, port, config.redis.db)
+                                        format!(
+                                            "redis://:{}@{}:{}/{}",
+                                            pw, host, port, config.redis.db
+                                        )
                                     } else {
                                         format!("redis://{}:{}/{}", host, port, config.redis.db)
                                     };
 
-                                    if let Ok(master_client) = redis::Client::open(master_url.as_str()) {
-                                        if let Ok(conn) = master_client.get_connection_manager().await {
-                                            log::info!("[Redis] sentinel connected to master {}:{}", host, port);
-                                            return Self { conn: Some(conn), description };
+                                    if let Ok(master_client) =
+                                        redis::Client::open(master_url.as_str())
+                                    {
+                                        if let Ok(conn) =
+                                            master_client.get_connection_manager().await
+                                        {
+                                            log::info!(
+                                                "[Redis] sentinel connected to master {}:{}",
+                                                host,
+                                                port
+                                            );
+                                            return Self {
+                                                conn: Some(conn),
+                                                description,
+                                            };
                                         }
                                     }
                                 }
                             }
                         }
 
-                        log::warn!("[Redis] sentinel master discovery failed, running without Redis");
-                        Self { conn: None, description }
+                        log::warn!(
+                            "[Redis] sentinel master discovery failed, running without Redis"
+                        );
+                        Self {
+                            conn: None,
+                            description,
+                        }
                     }
                     Err(e) => {
                         log::warn!("[Redis] sentinel connection failed: {}", e);
-                        Self { conn: None, description }
+                        Self {
+                            conn: None,
+                            description,
+                        }
                     }
                 }
             }
             Err(e) => {
                 log::warn!("[Redis] sentinel client build failed: {}", e);
-                Self { conn: None, description }
+                Self {
+                    conn: None,
+                    description,
+                }
             }
         }
     }
@@ -286,15 +332,14 @@ impl RedisPool {
 
 #[async_trait]
 impl RedisOps for RedisPool {
-    async fn get(&self, key: &str) -> Option<String> {
-        let mut conn = self.conn.clone()?;
-        match conn.get::<_, Option<String>>(key).await {
-            Ok(val) => val,
-            Err(e) => {
-                log::warn!("[Redis] GET {} failed: {}", key, e);
-                None
-            }
-        }
+    async fn get(&self, key: &str) -> Result<Option<String>, String> {
+        let Some(mut conn) = self.conn.clone() else {
+            return Err("Redis connection not available".to_string());
+        };
+        conn.get::<_, Option<String>>(key).await.map_err(|e| {
+            log::warn!("[Redis] GET {} failed: {}", key, e);
+            e.to_string()
+        })
     }
 
     async fn setex(&self, key: &str, seconds: u64, value: &str) -> Result<(), String> {
@@ -310,9 +355,7 @@ impl RedisOps for RedisPool {
         let Some(mut conn) = self.conn.clone() else {
             return Ok(());
         };
-        conn.del::<_, ()>(key)
-            .await
-            .map_err(|e| e.to_string())
+        conn.del::<_, ()>(key).await.map_err(|e| e.to_string())
     }
 
     async fn incr_by(&self, key: &str, delta: u64) -> Result<u64, String> {
@@ -329,11 +372,13 @@ impl RedisOps for RedisPool {
             return Ok(0);
         };
         // Lua script: INCRBY + EXPIRE atomically so counters don't leak
-        let script = redis::Script::new(r#"
+        let script = redis::Script::new(
+            r#"
             local val = redis.call("INCRBY", KEYS[1], ARGV[1])
             redis.call("EXPIRE", KEYS[1], ARGV[2])
             return val
-        "#);
+        "#,
+        );
         let mut invocation = script.prepare_invoke();
         invocation.key(key);
         invocation.arg(delta);
@@ -360,7 +405,7 @@ mod tests {
     async fn test_none_pool_graceful_ops() {
         let pool = RedisPool::none();
         assert!(!pool.ping().await);
-        assert_eq!(RedisOps::get(&pool, "key").await, None);
+        assert!(RedisOps::get(&pool, "key").await.is_err());
         assert!(RedisOps::setex(&pool, "key", 60, "val").await.is_ok());
         assert!(RedisOps::del(&pool, "key").await.is_ok());
         assert_eq!(RedisOps::incr_by(&pool, "key", 1).await.unwrap(), 0);

@@ -118,7 +118,12 @@ fn read_fourcc(data: &[u8], offset: usize) -> Result<[u8; 4], Mp4Error> {
     if offset + 4 > data.len() {
         return Err(Mp4Error::Truncated(offset as u64));
     }
-    Ok([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+    Ok([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ])
 }
 
 fn fourcc_str(cc: &[u8; 4]) -> String {
@@ -206,8 +211,7 @@ impl<'a> Iterator for AtomIter<'a> {
 /// Parse MP4 metadata from a byte buffer.
 pub fn parse_mp4(data: &[u8]) -> Result<Mp4Metadata, Mp4Error> {
     // Find moov atom at top level
-    let moov = find_atom(data, 0, data.len(), b"moov")?
-        .ok_or(Mp4Error::MoovNotFound)?;
+    let moov = find_atom(data, 0, data.len(), b"moov")?.ok_or(Mp4Error::MoovNotFound)?;
 
     // Parse mvhd for global timescale/duration
     let (timescale, duration) = parse_mvhd(data, &moov)?;
@@ -450,11 +454,14 @@ fn parse_stts(data: &[u8], stbl: &Atom) -> Result<Vec<SttsEntry>, Mp4Error> {
         return Err(Mp4Error::Truncated(atom.data_start as u64));
     }
     let entry_count = read_u32(d, 4)? as usize;
+    // Cap allocation to what the data can actually hold (prevents OOM on malicious input)
+    let max_possible = d.len().saturating_sub(8) / 8;
+    let entry_count = entry_count.min(max_possible);
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = 8 + i * 8;
         if off + 8 > d.len() {
-            break;
+            return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
         }
         entries.push(SttsEntry {
             sample_count: read_u32(d, off)?,
@@ -474,11 +481,13 @@ fn parse_stsc(data: &[u8], stbl: &Atom) -> Result<Vec<StscEntry>, Mp4Error> {
         return Err(Mp4Error::Truncated(atom.data_start as u64));
     }
     let entry_count = read_u32(d, 4)? as usize;
+    let max_possible = d.len().saturating_sub(8) / 12;
+    let entry_count = entry_count.min(max_possible);
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = 8 + i * 12;
         if off + 12 > d.len() {
-            break;
+            return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
         }
         entries.push(StscEntry {
             first_chunk: read_u32(d, off)?,
@@ -502,15 +511,19 @@ fn parse_stsz(data: &[u8], stbl: &Atom) -> Result<Vec<u32>, Mp4Error> {
     let sample_count = read_u32(d, 8)? as usize;
 
     if sample_size != 0 {
-        // Fixed sample size — all samples have the same size
-        return Ok(vec![sample_size; sample_count]);
+        // Fixed sample size — cap to what data could hold to prevent OOM
+        let max_possible = d.len().saturating_sub(12) / 4;
+        let capped = sample_count.min(max_possible).min(10_000_000);
+        return Ok(vec![sample_size; capped]);
     }
 
+    let max_possible = d.len().saturating_sub(12) / 4;
+    let sample_count = sample_count.min(max_possible);
     let mut sizes = Vec::with_capacity(sample_count);
     for i in 0..sample_count {
         let off = 12 + i * 4;
         if off + 4 > d.len() {
-            break;
+            return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
         }
         sizes.push(read_u32(d, off)?);
     }
@@ -525,11 +538,13 @@ fn parse_stco(data: &[u8], stbl: &Atom) -> Result<Vec<u64>, Mp4Error> {
             return Err(Mp4Error::Truncated(atom.data_start as u64));
         }
         let entry_count = read_u32(d, 4)? as usize;
+        let max_possible = d.len().saturating_sub(8) / 8;
+        let entry_count = entry_count.min(max_possible);
         let mut offsets = Vec::with_capacity(entry_count);
         for i in 0..entry_count {
             let off = 8 + i * 8;
             if off + 8 > d.len() {
-                break;
+                return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
             }
             offsets.push(read_u64(d, off)?);
         }
@@ -542,11 +557,13 @@ fn parse_stco(data: &[u8], stbl: &Atom) -> Result<Vec<u64>, Mp4Error> {
             return Err(Mp4Error::Truncated(atom.data_start as u64));
         }
         let entry_count = read_u32(d, 4)? as usize;
+        let max_possible = d.len().saturating_sub(8) / 4;
+        let entry_count = entry_count.min(max_possible);
         let mut offsets = Vec::with_capacity(entry_count);
         for i in 0..entry_count {
             let off = 8 + i * 4;
             if off + 4 > d.len() {
-                break;
+                return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
             }
             offsets.push(read_u32(d, off)? as u64);
         }
@@ -566,11 +583,13 @@ fn parse_stss(data: &[u8], stbl: &Atom) -> Result<Option<Vec<u32>>, Mp4Error> {
         return Err(Mp4Error::Truncated(atom.data_start as u64));
     }
     let entry_count = read_u32(d, 4)? as usize;
+    let max_possible = d.len().saturating_sub(8) / 4;
+    let entry_count = entry_count.min(max_possible);
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = 8 + i * 4;
         if off + 4 > d.len() {
-            break;
+            return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
         }
         entries.push(read_u32(d, off)?);
     }
@@ -587,11 +606,13 @@ fn parse_ctts(data: &[u8], stbl: &Atom) -> Result<Option<Vec<CttsEntry>>, Mp4Err
         return Err(Mp4Error::Truncated(atom.data_start as u64));
     }
     let entry_count = read_u32(d, 4)? as usize;
+    let max_possible = d.len().saturating_sub(8) / 8;
+    let entry_count = entry_count.min(max_possible);
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let off = 8 + i * 8;
         if off + 8 > d.len() {
-            break;
+            return Err(Mp4Error::Truncated(atom.data_start as u64 + off as u64));
         }
         entries.push(CttsEntry {
             sample_count: read_u32(d, off)?,
@@ -601,10 +622,7 @@ fn parse_ctts(data: &[u8], stbl: &Atom) -> Result<Option<Vec<CttsEntry>>, Mp4Err
     Ok(Some(entries))
 }
 
-fn parse_audio_info(
-    data: &[u8],
-    stbl: &Atom,
-) -> Result<(Option<u32>, Option<u16>), Mp4Error> {
+fn parse_audio_info(data: &[u8], stbl: &Atom) -> Result<(Option<u32>, Option<u16>), Mp4Error> {
     let stsd = match find_atom(data, stbl.data_start, stbl.data_end, b"stsd")? {
         Some(a) => a,
         None => return Ok((None, None)),
@@ -628,10 +646,7 @@ fn parse_audio_info(
 /// Get the sample offset and size within the original MP4 data.
 ///
 /// Uses stsc (sample-to-chunk) and stco (chunk offsets) to locate sample data.
-pub fn get_sample_offset(
-    table: &SampleTable,
-    sample_index: u32,
-) -> Option<(u64, u32)> {
+pub fn get_sample_offset(table: &SampleTable, sample_index: u32) -> Option<(u64, u32)> {
     if sample_index as usize >= table.stsz.len() {
         return None;
     }
@@ -809,7 +824,7 @@ mod tests {
 
     fn make_mvhd_v0(timescale: u32, duration: u32) -> Vec<u8> {
         let mut content = vec![0u8; 100]; // version=0, flags=0, then fields
-        // version(1) + flags(3) + creation_time(4) + modification_time(4) = 12
+                                          // version(1) + flags(3) + creation_time(4) + modification_time(4) = 12
         content[12] = (timescale >> 24) as u8;
         content[13] = (timescale >> 16) as u8;
         content[14] = (timescale >> 8) as u8;
@@ -866,7 +881,7 @@ mod tests {
     fn make_stsd_video() -> Vec<u8> {
         let mut content = vec![0u8; 8]; // version + flags + entry_count=1
         content[7] = 1; // entry_count = 1
-        // Sample entry: size(4) + fourcc(4) + rest
+                        // Sample entry: size(4) + fourcc(4) + rest
         let mut entry = vec![0u8; 86]; // minimal video sample entry
         let entry_size = (entry.len() + 8) as u32;
         let mut entry_with_header = Vec::new();
@@ -1017,8 +1032,14 @@ mod tests {
     #[test]
     fn test_sample_to_dts() {
         let stts = vec![
-            SttsEntry { sample_count: 5, sample_delta: 1000 },
-            SttsEntry { sample_count: 5, sample_delta: 2000 },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 1000,
+            },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 2000,
+            },
         ];
         assert_eq!(sample_to_dts(&stts, 0), 0);
         assert_eq!(sample_to_dts(&stts, 1), 1000);
@@ -1030,8 +1051,14 @@ mod tests {
     #[test]
     fn test_dts_to_sample() {
         let stts = vec![
-            SttsEntry { sample_count: 5, sample_delta: 1000 },
-            SttsEntry { sample_count: 5, sample_delta: 2000 },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 1000,
+            },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 2000,
+            },
         ];
         assert_eq!(dts_to_sample(&stts, 0), 0);
         assert_eq!(dts_to_sample(&stts, 999), 0);
@@ -1058,8 +1085,14 @@ mod tests {
     #[test]
     fn test_total_samples() {
         let stts = vec![
-            SttsEntry { sample_count: 5, sample_delta: 1000 },
-            SttsEntry { sample_count: 3, sample_delta: 2000 },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 1000,
+            },
+            SttsEntry {
+                sample_count: 3,
+                sample_delta: 2000,
+            },
         ];
         assert_eq!(total_samples(&stts), 8);
     }
@@ -1067,7 +1100,10 @@ mod tests {
     #[test]
     fn test_get_sample_offset() {
         let table = SampleTable {
-            stts: vec![SttsEntry { sample_count: 10, sample_delta: 1000 }],
+            stts: vec![SttsEntry {
+                sample_count: 10,
+                sample_delta: 1000,
+            }],
             stsc: vec![StscEntry {
                 first_chunk: 1,
                 samples_per_chunk: 5,

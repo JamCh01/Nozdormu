@@ -118,13 +118,17 @@ impl ImageParams {
         self.height.map(|h| (h as f32 * self.dpr).round() as u32)
     }
 
-    /// Clamp dimensions to config limits.
+    /// Clamp dimensions to config limits, accounting for DPR.
+    /// Ensures that effective dimensions (width * dpr) stay within max bounds.
     pub fn clamp(&mut self, config: &ImageOptimizationConfig) {
         if let Some(ref mut w) = self.width {
-            *w = (*w).min(config.max_width);
+            // Clamp so that w * dpr <= max_width
+            let max_for_dpr = (config.max_width as f32 / self.dpr).floor() as u32;
+            *w = (*w).min(max_for_dpr);
         }
         if let Some(ref mut h) = self.height {
-            *h = (*h).min(config.max_height);
+            let max_for_dpr = (config.max_height as f32 / self.dpr).floor() as u32;
+            *h = (*h).min(max_for_dpr);
         }
     }
 
@@ -156,11 +160,9 @@ mod tests {
     #[test]
     fn test_parse_all_params() {
         let config = default_config();
-        let params = ImageParams::from_query(
-            Some("w=400&h=300&fit=cover&fmt=webp&q=75&dpr=2"),
-            &config,
-        )
-        .unwrap();
+        let params =
+            ImageParams::from_query(Some("w=400&h=300&fit=cover&fmt=webp&q=75&dpr=2"), &config)
+                .unwrap();
         assert_eq!(params.width, Some(400));
         assert_eq!(params.height, Some(300));
         assert_eq!(params.fit, ResizeFit::Cover);

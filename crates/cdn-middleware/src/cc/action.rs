@@ -11,24 +11,16 @@ pub enum CcActionResult {
     /// Request is allowed to proceed.
     Allow,
     /// Block the request (429 Too Many Requests).
-    Block {
-        retry_after: u64,
-        reason: String,
-    },
+    Block { retry_after: u64, reason: String },
     /// Serve a JS challenge page (503).
     Challenge {
         cookie_value: String,
         reason: String,
     },
     /// Delay the request (sleep then continue).
-    Delay {
-        delay_ms: u64,
-        reason: String,
-    },
+    Delay { delay_ms: u64, reason: String },
     /// Log only, continue processing.
-    Log {
-        reason: String,
-    },
+    Log { reason: String },
 }
 
 /// JS Challenge: HMAC-SHA256 based cookie challenge.
@@ -81,7 +73,7 @@ impl ChallengeManager {
         // Check expiry
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         if now.saturating_sub(timestamp) > CHALLENGE_VALIDITY_SECS {
             return false;

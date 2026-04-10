@@ -124,11 +124,7 @@ pub fn content_range_unsatisfied(total: u64) -> String {
 ///
 /// If-Range can be an ETag (strong comparison) or an HTTP-date.
 /// Returns true if the condition matches (serve partial), false (serve full).
-pub fn check_if_range(
-    if_range: &str,
-    etag: Option<&str>,
-    last_modified: Option<&str>,
-) -> bool {
+pub fn check_if_range(if_range: &str, etag: Option<&str>, last_modified: Option<&str>) -> bool {
     let if_range = if_range.trim();
     if if_range.is_empty() {
         return true;
@@ -248,7 +244,10 @@ mod tests {
 
     #[test]
     fn test_resolve_single() {
-        assert_eq!(resolve_range(&RangeSpec::Single(0, 499), 1000), Ok((0, 499)));
+        assert_eq!(
+            resolve_range(&RangeSpec::Single(0, 499), 1000),
+            Ok((0, 499))
+        );
         // End clamped to total - 1
         assert_eq!(
             resolve_range(&RangeSpec::Single(0, 9999), 1000),
@@ -318,30 +317,18 @@ mod tests {
 
     #[test]
     fn test_if_range_etag_match() {
-        assert!(check_if_range(
-            "\"abc123\"",
-            Some("\"abc123\""),
-            None
-        ));
+        assert!(check_if_range("\"abc123\"", Some("\"abc123\""), None));
     }
 
     #[test]
     fn test_if_range_etag_mismatch() {
-        assert!(!check_if_range(
-            "\"abc123\"",
-            Some("\"xyz789\""),
-            None
-        ));
+        assert!(!check_if_range("\"abc123\"", Some("\"xyz789\""), None));
     }
 
     #[test]
     fn test_if_range_weak_etag_rejected() {
         // Weak ETags never match for If-Range (strong comparison required)
-        assert!(!check_if_range(
-            "W/\"abc123\"",
-            Some("W/\"abc123\""),
-            None
-        ));
+        assert!(!check_if_range("W/\"abc123\"", Some("W/\"abc123\""), None));
     }
 
     #[test]

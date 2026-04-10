@@ -140,9 +140,18 @@ mod tests {
     #[test]
     fn test_malformed_url_no_segments() {
         let config = make_config("key", 1800);
-        assert!(matches!(validate(&config, "/"), Err(AuthError::MalformedUrl)));
-        assert!(matches!(validate(&config, "/123"), Err(AuthError::MalformedUrl)));
-        assert!(matches!(validate(&config, "/123/abc"), Err(AuthError::MalformedUrl)));
+        assert!(matches!(
+            validate(&config, "/"),
+            Err(AuthError::MalformedUrl)
+        ));
+        assert!(matches!(
+            validate(&config, "/123"),
+            Err(AuthError::MalformedUrl)
+        ));
+        assert!(matches!(
+            validate(&config, "/123/abc"),
+            Err(AuthError::MalformedUrl)
+        ));
     }
 
     #[test]

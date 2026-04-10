@@ -8,8 +8,8 @@ use cdn_cache::storage::CacheStorage;
 use cdn_config::{load_cdn_config, BootstrapConfig, LiveConfig, NodeConfig};
 use cdn_middleware::cc::CcEngine;
 use cdn_middleware::waf::WafEngine;
-use cdn_proxy::admin::{admin_router, AdminState};
 use cdn_proxy::admin::purge::PurgeTaskTracker;
+use cdn_proxy::admin::{admin_router, AdminState};
 use cdn_proxy::balancer::DynamicBalancer;
 use cdn_proxy::dns::DnsResolver;
 use cdn_proxy::health::HealthChecker;
@@ -124,10 +124,7 @@ fn main() {
 
     let global_config = rt.block_on(cdn_config::load_global_config(&bootstrap.etcd));
 
-    let node_config = NodeConfig::from_etcd_and_cli(
-        &global_config,
-        &bootstrap,
-    );
+    let node_config = NodeConfig::from_etcd_and_cli(&global_config, &bootstrap);
     if let Err(errors) = node_config.validate() {
         for e in &errors {
             log::error!("[Config] {}", e);
@@ -142,8 +139,7 @@ fn main() {
         .conf
         .clone()
         .unwrap_or_else(|| "config/default.yaml".to_string());
-    let cdn_config =
-        load_cdn_config(Path::new(&config_path)).expect("failed to load CDN config");
+    let cdn_config = load_cdn_config(Path::new(&config_path)).expect("failed to load CDN config");
 
     let mut server = Server::new(Some(cdn_opt.pingora)).expect("failed to create server");
     server.bootstrap();
@@ -166,7 +162,10 @@ fn main() {
     ));
     match rt.block_on(etcd_manager.load_all()) {
         Ok(rev) => log::info!("[Init] etcd initial load complete at revision {}", rev),
-        Err(e) => log::warn!("[Init] etcd initial load failed: {}, starting with empty config", e),
+        Err(e) => log::warn!(
+            "[Init] etcd initial load failed: {}, starting with empty config",
+            e
+        ),
     }
 
     drop(rt);
@@ -285,9 +284,9 @@ fn main() {
     };
 
     // Prefetch worker for streaming segment pre-fetching
-    let prefetch_worker = Arc::new(
-        cdn_streaming::prefetch::PrefetchWorker::new(Arc::clone(&cache_storage))
-    );
+    let prefetch_worker = Arc::new(cdn_streaming::prefetch::PrefetchWorker::new(Arc::clone(
+        &cache_storage,
+    )));
 
     let cdn_proxy = CdnProxy {
         lb,
@@ -303,6 +302,7 @@ fn main() {
         default_compression: node_config.compression.clone(),
         default_image_optimization: node_config.image_optimization.clone(),
         prefetch_worker,
+        node_id: Arc::from(node_config.node.id.as_str()),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
@@ -343,8 +343,8 @@ fn main() {
 // ── Background service wrappers ──
 
 use async_trait::async_trait;
-use pingora::services::background::BackgroundService;
 use pingora::server::ShutdownWatch;
+use pingora::services::background::BackgroundService;
 
 struct AdminBgService {
     state: Arc<AdminState>,
@@ -363,11 +363,10 @@ impl BackgroundService for AdminBgService {
             }
         };
         log::info!("[Admin] API listening on 127.0.0.1:8080");
-        let graceful = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown.changed().await;
-                log::info!("[Admin] shutting down");
-            });
+        let graceful = axum::serve(listener, app).with_graceful_shutdown(async move {
+            let _ = shutdown.changed().await;
+            log::info!("[Admin] shutting down");
+        });
         if let Err(e) = graceful.await {
             log::error!("[Admin] server error: {}", e);
         }

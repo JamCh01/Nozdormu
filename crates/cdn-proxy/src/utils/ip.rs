@@ -32,11 +32,7 @@ fn default_trusted() -> &'static [IpNet] {
 ///
 /// This prevents spoofing: an attacker can prepend fake IPs to XFF,
 /// but they can't control the rightmost entries added by trusted proxies.
-pub fn real_ip_from_xff(
-    xff: &str,
-    remote_addr: IpAddr,
-    extra_trusted: &[IpNet],
-) -> IpAddr {
+pub fn real_ip_from_xff(xff: &str, remote_addr: IpAddr, extra_trusted: &[IpNet]) -> IpAddr {
     let defaults = default_trusted();
 
     // Parse XFF: "client, proxy1, proxy2"
@@ -132,10 +128,10 @@ mod tests {
         assert!(is_private_ip("192.168.1.1".parse().unwrap()));
         assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
         // IPv6
-        assert!(is_private_ip("::1".parse().unwrap()));           // loopback
-        assert!(is_private_ip("fc00::1".parse().unwrap()));       // ULA
+        assert!(is_private_ip("::1".parse().unwrap())); // loopback
+        assert!(is_private_ip("fc00::1".parse().unwrap())); // ULA
         assert!(is_private_ip("fd12:3456::1".parse().unwrap())); // ULA
-        assert!(is_private_ip("fe80::1".parse().unwrap()));       // link-local
+        assert!(is_private_ip("fe80::1".parse().unwrap())); // link-local
         assert!(!is_private_ip("2001:db8::1".parse().unwrap())); // public
     }
 }

@@ -10,8 +10,8 @@ use std::sync::Arc;
 pub struct CacheMeta {
     pub status: u16,
     pub headers: HashMap<String, String>,
-    pub cached_at: i64,   // Unix timestamp
-    pub expires_at: i64,  // Unix timestamp
+    pub cached_at: i64,  // Unix timestamp
+    pub expires_at: i64, // Unix timestamp
     pub size: u64,
     pub etag: Option<String>,
 }
@@ -46,7 +46,10 @@ impl CacheStorage {
 
     /// Create a disabled CacheStorage (no backend).
     pub fn disabled() -> Self {
-        Self { oss: None, redis: None }
+        Self {
+            oss: None,
+            redis: None,
+        }
     }
 
     /// Check if storage is available.
@@ -56,18 +59,14 @@ impl CacheStorage {
 
     /// Read a cached response.
     /// Returns None on miss, expiry, or error.
-    pub async fn get(
-        &self,
-        site_id: &str,
-        cache_key: &str,
-    ) -> Option<CachedResponse> {
+    pub async fn get(&self, site_id: &str, cache_key: &str) -> Option<CachedResponse> {
         let oss = self.oss.as_ref()?;
         let object_path = cache_object_path(site_id, cache_key);
         let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
 
         // Step 1: Try Redis metadata first
         if let Some(ref redis) = self.redis {
-            if let Some(meta_json) = redis.get(&redis_key).await {
+            if let Ok(Some(meta_json)) = redis.get(&redis_key).await {
                 if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
                     let now = chrono::Utc::now().timestamp();
                     if meta.expires_at <= now {
@@ -90,7 +89,11 @@ impl CacheStorage {
                             let rk = redis_key.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = redis.del(&rk).await {
-                                    log::warn!("[Cache] background Redis DEL failed: {} - {}", rk, e);
+                                    log::warn!(
+                                        "[Cache] background Redis DEL failed: {} - {}",
+                                        rk,
+                                        e
+                                    );
                                 }
                             });
                             return None;
@@ -145,7 +148,7 @@ impl CacheStorage {
 
         // Must have valid, non-expired meta
         if let Some(ref redis) = self.redis {
-            if let Some(meta_json) = redis.get(&redis_key).await {
+            if let Ok(Some(meta_json)) = redis.get(&redis_key).await {
                 if let Ok(meta) = serde_json::from_str::<CacheMeta>(&meta_json) {
                     let now = chrono::Utc::now().timestamp();
                     if meta.expires_at <= now {
@@ -189,8 +192,8 @@ impl CacheStorage {
             .map_err(|e| format!("OSS put error: {}", e))?;
 
         // Step 2: Redis SETEX meta
-        let meta_json = serde_json::to_string(meta)
-            .map_err(|e| format!("meta serialize error: {}", e))?;
+        let meta_json =
+            serde_json::to_string(meta).map_err(|e| format!("meta serialize error: {}", e))?;
         let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, cache_key);
         let ttl = (meta.expires_at - chrono::Utc::now().timestamp()).clamp(1, 86400 * 365) as u64;
 
@@ -202,18 +205,16 @@ impl CacheStorage {
 
         log::debug!(
             "[Cache] stored: {} ({} bytes, ttl={}s)",
-            object_path, meta.size, ttl
+            object_path,
+            meta.size,
+            ttl
         );
 
         Ok(())
     }
 
     /// Delete a cached response.
-    pub async fn delete(
-        &self,
-        site_id: &str,
-        cache_key: &str,
-    ) -> Result<(), String> {
+    pub async fn delete(&self, site_id: &str, cache_key: &str) -> Result<(), String> {
         let oss = self.oss.as_ref().ok_or("OSS not configured")?;
         let object_path = cache_object_path(site_id, cache_key);
 
@@ -235,11 +236,7 @@ impl CacheStorage {
     /// Delete multiple cache entries by their cache keys.
     /// Used for site-wide purge after discovering keys via Redis SCAN.
     /// Returns the count of successfully deleted entries.
-    pub async fn delete_many(
-        &self,
-        site_id: &str,
-        cache_keys: &[String],
-    ) -> Result<u32, String> {
+    pub async fn delete_many(&self, site_id: &str, cache_keys: &[String]) -> Result<u32, String> {
         if cache_keys.is_empty() {
             return Ok(0);
         }
@@ -255,18 +252,31 @@ impl CacheStorage {
             match oss.delete_objects_batch(&object_paths).await {
                 Ok(count) => deleted = count,
                 Err(e) => {
-                    log::error!("[Cache] batch OSS delete failed for site {}: {}", site_id, e);
+                    log::error!(
+                        "[Cache] batch OSS delete failed for site {}: {}",
+                        site_id,
+                        e
+                    );
                     return Err(format!("OSS batch delete error: {}", e));
                 }
             }
         }
 
-        // Delete Redis meta keys
+        // Delete Redis meta keys concurrently in batches
         if let Some(ref redis) = self.redis {
-            for key in cache_keys {
-                let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, key);
-                if let Err(e) = redis.del(&redis_key).await {
-                    log::warn!("[Cache] Redis DEL failed: {} - {}", redis_key, e);
+            for chunk in cache_keys.chunks(100) {
+                let mut handles = Vec::with_capacity(chunk.len());
+                for key in chunk {
+                    let redis_key = format!("nozdormu:cache:meta:{}:{}", site_id, key);
+                    let r = Arc::clone(redis);
+                    handles.push(tokio::spawn(async move {
+                        if let Err(e) = r.del(&redis_key).await {
+                            log::warn!("[Cache] Redis DEL failed: {} - {}", redis_key, e);
+                        }
+                    }));
+                }
+                for h in handles {
+                    let _ = h.await;
                 }
             }
         }
@@ -277,14 +287,12 @@ impl CacheStorage {
     /// Delete all cache entries for a site by listing OSS objects.
     /// Fallback path when Redis is unavailable for SCAN.
     /// Returns the count of deleted objects.
-    pub async fn delete_site_oss_only(
-        &self,
-        site_id: &str,
-    ) -> Result<u32, String> {
+    pub async fn delete_site_oss_only(&self, site_id: &str) -> Result<u32, String> {
         let oss = self.oss.as_ref().ok_or("OSS not configured")?;
         let prefix = format!("cache/{}/", site_id);
 
-        let keys = oss.list_objects(&prefix, 1_000_000)
+        let keys = oss
+            .list_objects(&prefix, 1_000_000)
             .await
             .map_err(|e| format!("OSS list error: {}", e))?;
 
@@ -294,10 +302,12 @@ impl CacheStorage {
 
         log::info!(
             "[Cache] purge site {} via OSS listing: {} objects found",
-            site_id, keys.len()
+            site_id,
+            keys.len()
         );
 
-        let deleted = oss.delete_objects_batch(&keys)
+        let deleted = oss
+            .delete_objects_batch(&keys)
             .await
             .map_err(|e| format!("OSS batch delete error: {}", e))?;
 

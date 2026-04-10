@@ -87,7 +87,10 @@ pub fn sign(
     let key = hmac::Key::new(hmac::HMAC_SHA256, config.auth_key.as_bytes());
     let hash = compute_hash(&key, path, timestamp, rand, uid);
     let hash_short = &hash[..32.min(hash.len())];
-    format!("{}?auth_key={}-{}-{}-{}", path, timestamp, rand, uid, hash_short)
+    format!(
+        "{}?auth_key={}-{}-{}-{}",
+        path, timestamp, rand, uid, hash_short
+    )
 }
 
 #[cfg(test)]
@@ -115,7 +118,13 @@ mod tests {
     fn test_sign_and_validate_roundtrip() {
         let config = make_config("my-secret-key", 1800);
         let ts = current_timestamp();
-        let signed = sign(&config, "/video/test.mp4", ts, Some("abc123"), Some("user1"));
+        let signed = sign(
+            &config,
+            "/video/test.mp4",
+            ts,
+            Some("abc123"),
+            Some("user1"),
+        );
         // Extract path and query
         let (path, query) = signed.split_once('?').unwrap();
         let result = validate(&config, path, Some(query));

@@ -15,10 +15,7 @@ pub fn compute_segment_count(metadata: &Mp4Metadata, segment_duration: f64) -> u
 /// Compute actual segment durations aligned to keyframes.
 ///
 /// Returns a Vec of (segment_index, actual_duration_secs) pairs.
-pub fn compute_segment_durations(
-    metadata: &Mp4Metadata,
-    segment_duration: f64,
-) -> Vec<(u32, f64)> {
+pub fn compute_segment_durations(metadata: &Mp4Metadata, segment_duration: f64) -> Vec<(u32, f64)> {
     let segment_count = compute_segment_count(metadata, segment_duration);
     if segment_count == 0 {
         return Vec::new();
@@ -41,12 +38,9 @@ pub fn compute_segment_durations(
     let mut prev_sample: u32 = 0;
 
     for seg_idx in 0..segment_count {
-        let target_end_time =
-            (seg_idx + 1) as f64 * segment_duration * track.timescale as f64;
-        let mut end_sample = mp4_parse::dts_to_sample(
-            &track.sample_table.stts,
-            target_end_time as u64,
-        );
+        let target_end_time = (seg_idx + 1) as f64 * segment_duration * track.timescale as f64;
+        let mut end_sample =
+            mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_time as u64);
 
         if end_sample >= total_samples {
             end_sample = total_samples;
@@ -73,10 +67,7 @@ pub fn compute_segment_durations(
             continue; // Skip empty segments
         }
 
-        let start_dts = mp4_parse::sample_to_dts(
-            &track.sample_table.stts,
-            prev_sample,
-        );
+        let start_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, prev_sample);
         let end_dts = if end_sample >= total_samples {
             track.duration
         } else {
@@ -145,10 +136,10 @@ pub fn generate_media_playlist(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::mp4_parse::{
         Mp4Metadata, SampleTable, StscEntry, SttsEntry, TrackInfo, TrackType,
     };
+    use super::*;
 
     fn make_test_metadata(duration_secs: f64, num_samples: u32) -> Mp4Metadata {
         let timescale = 90000u32;
@@ -228,8 +219,7 @@ mod tests {
     #[test]
     fn test_generate_media_playlist_with_query() {
         let meta = make_test_metadata(6.0, 180);
-        let playlist =
-            generate_media_playlist(&meta, 6.0, "/video.mp4", "&quality=high");
+        let playlist = generate_media_playlist(&meta, 6.0, "/video.mp4", "&quality=high");
 
         assert!(playlist.contains("segment=init&quality=high"));
         assert!(playlist.contains("segment=0&quality=high"));

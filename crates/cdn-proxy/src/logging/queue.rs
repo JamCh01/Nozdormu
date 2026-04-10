@@ -2,13 +2,54 @@ use crate::utils::redis_pool::RedisPool;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
+use tokio::sync::mpsc;
 
-static LOG_REDIS: OnceLock<Arc<RedisPool>> = OnceLock::new();
+static LOG_SENDER: OnceLock<mpsc::Sender<String>> = OnceLock::new();
 
 /// Initialize the log queue with a Redis pool.
-/// Call once during startup.
+/// Spawns a single background consumer that batches log entries to Redis.
 pub fn init_log_queue(pool: Arc<RedisPool>) {
-    LOG_REDIS.set(pool).ok();
+    let (tx, rx) = mpsc::channel::<String>(8192);
+    LOG_SENDER.set(tx).ok();
+    tokio::spawn(log_consumer(pool, rx));
+}
+
+/// Background consumer: drains the channel in batches and writes to Redis.
+async fn log_consumer(pool: Arc<RedisPool>, mut rx: mpsc::Receiver<String>) {
+    loop {
+        // Wait for the first entry
+        let first = match rx.recv().await {
+            Some(entry) => entry,
+            None => break, // channel closed
+        };
+
+        // Drain up to 63 more entries without blocking
+        let mut batch = Vec::with_capacity(64);
+        batch.push(first);
+        while batch.len() < 64 {
+            match rx.try_recv() {
+                Ok(entry) => batch.push(entry),
+                Err(_) => break,
+            }
+        }
+
+        // Write batch to Redis
+        if pool.is_available() {
+            for json in &batch {
+                if let Err(e) = pool
+                    .xadd("nozdormu:log:requests", 100_000, "data", json)
+                    .await
+                {
+                    log::warn!("[LogQueue] Redis XADD failed: {}", e);
+                    log::info!("[LogQueue:local] {}", json);
+                }
+            }
+        } else {
+            for json in &batch {
+                log::debug!("[LogQueue] {}", json);
+            }
+        }
+    }
 }
 
 /// Log entry for a completed request.
@@ -44,8 +85,8 @@ pub struct LogEntry {
     pub node_id: String,
 }
 
-/// Push a log entry to Redis Streams (fire-and-forget).
-/// Falls back to local log if Redis is unavailable or XADD fails.
+/// Push a log entry to the bounded channel.
+/// Drops the entry on backpressure (channel full) to prevent unbounded memory growth.
 pub fn push_log_entry(entry: LogEntry) {
     let json = match serde_json::to_string(&entry) {
         Ok(j) => j,
@@ -55,24 +96,11 @@ pub fn push_log_entry(entry: LogEntry) {
         }
     };
 
-    if let Some(pool) = LOG_REDIS.get() {
-        if pool.is_available() {
-            let pool = Arc::clone(pool);
-            let json_fallback = json.clone();
-            tokio::spawn(async move {
-                if let Err(e) = pool.xadd(
-                    "nozdormu:log:requests",
-                    100_000,
-                    "data",
-                    &json_fallback,
-                ).await {
-                    log::warn!("[LogQueue] Redis XADD failed, fallback to local: {}", e);
-                    log::info!("[LogQueue:local] {}", json_fallback);
-                }
-            });
-            return;
+    if let Some(tx) = LOG_SENDER.get() {
+        if tx.try_send(json).is_err() {
+            log::debug!("[LogQueue] channel full, dropping log entry");
         }
+    } else {
+        log::debug!("[LogQueue] {}", json);
     }
-
-    log::debug!("[LogQueue] {}", json);
 }

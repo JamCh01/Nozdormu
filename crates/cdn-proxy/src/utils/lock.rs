@@ -141,8 +141,14 @@ mod tests {
 
     #[test]
     fn test_lock_names() {
-        assert_eq!(lock_names::acme_obtain("example.com"), "acme:obtain:example.com");
+        assert_eq!(
+            lock_names::acme_obtain("example.com"),
+            "acme:obtain:example.com"
+        );
         assert_eq!(lock_names::renewal_scan(), "renewal:scan");
-        assert_eq!(lock_names::renewal_domain("example.com"), "renewal:example.com");
+        assert_eq!(
+            lock_names::renewal_domain("example.com"),
+            "renewal:example.com"
+        );
     }
 }

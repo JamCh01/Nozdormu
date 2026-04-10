@@ -20,11 +20,7 @@ pub struct RenewalManager {
 }
 
 impl RenewalManager {
-    pub fn new(
-        storage: Arc<CertStorage>,
-        acme: Arc<AcmeClient>,
-        renewal_days: u64,
-    ) -> Self {
+    pub fn new(storage: Arc<CertStorage>, acme: Arc<AcmeClient>, renewal_days: u64) -> Self {
         Self {
             storage,
             acme,
@@ -54,7 +50,8 @@ impl RenewalManager {
 
             log::info!(
                 "[Renewal] cert for {} needs renewal (expires_at={})",
-                domain, cert.expires_at
+                domain,
+                cert.expires_at
             );
 
             // TODO: Acquire distributed lock via etcd before renewing

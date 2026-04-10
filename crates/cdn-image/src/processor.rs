@@ -38,8 +38,7 @@ pub fn process_image(
     output_format: &ImageFormat,
 ) -> Result<Vec<u8>, ImageError> {
     // 1. Decode
-    let img = image::load_from_memory(input)
-        .map_err(|e| ImageError::Decode(e.to_string()))?;
+    let img = image::load_from_memory(input).map_err(|e| ImageError::Decode(e.to_string()))?;
 
     let (orig_w, orig_h) = img.dimensions();
 
@@ -65,8 +64,7 @@ fn resize_image(
     target_h: Option<u32>,
     fit: &ResizeFit,
 ) -> Result<DynamicImage, ImageError> {
-    let (resize_w, resize_h, crop) =
-        calculate_dimensions(orig_w, orig_h, target_w, target_h, fit);
+    let (resize_w, resize_h, crop) = calculate_dimensions(orig_w, orig_h, target_w, target_h, fit);
 
     // No resize needed if dimensions match
     if resize_w == orig_w && resize_h == orig_h && crop.is_none() {
@@ -153,18 +151,19 @@ fn calculate_dimensions(
             let resize_h = (orig_h as f64 * scale).round() as u32;
 
             // Only crop if both target dimensions were specified
-            let crop = if target_w.is_some() && target_h.is_some() && (resize_w > tw || resize_h > th) {
-                let crop_x = (resize_w.saturating_sub(tw)) / 2;
-                let crop_y = (resize_h.saturating_sub(th)) / 2;
-                Some(CropRect {
-                    x: crop_x,
-                    y: crop_y,
-                    width: tw.min(resize_w),
-                    height: th.min(resize_h),
-                })
-            } else {
-                None
-            };
+            let crop =
+                if target_w.is_some() && target_h.is_some() && (resize_w > tw || resize_h > th) {
+                    let crop_x = (resize_w.saturating_sub(tw)) / 2;
+                    let crop_y = (resize_h.saturating_sub(th)) / 2;
+                    Some(CropRect {
+                        x: crop_x,
+                        y: crop_y,
+                        width: tw.min(resize_w),
+                        height: th.min(resize_h),
+                    })
+                } else {
+                    None
+                };
 
             (resize_w.max(1), resize_h.max(1), crop)
         }
@@ -210,7 +209,8 @@ fn encode_image(
         }
         ImageFormat::WebP => {
             let rgba = img.to_rgba8();
-            // image 0.25 WebP encoder only supports lossless
+            // image 0.25 WebP encoder only supports lossless; quality param is ignored
+            log::debug!("[Image] WebP encoder: lossless only, quality param ignored");
             let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut buf);
             encoder
                 .write_image(
@@ -225,7 +225,7 @@ fn encode_image(
             let rgba = img.to_rgba8();
             let encoder = image::codecs::avif::AvifEncoder::new_with_speed_quality(
                 &mut buf,
-                6,     // speed (1=slow/best, 10=fast/worst)
+                6, // speed (1=slow/best, 10=fast/worst)
                 quality as u8,
             );
             encoder
@@ -407,7 +407,8 @@ mod tests {
 
     #[test]
     fn test_calculate_dimensions_contain() {
-        let (w, h, crop) = calculate_dimensions(200, 100, Some(100), Some(100), &ResizeFit::Contain);
+        let (w, h, crop) =
+            calculate_dimensions(200, 100, Some(100), Some(100), &ResizeFit::Contain);
         assert_eq!(w, 100);
         assert_eq!(h, 50);
         assert!(crop.is_none());

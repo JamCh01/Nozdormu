@@ -1,20 +1,14 @@
-use cdn_common::HeaderRule;
-use crate::headers::variables::VariableContext;
 use crate::headers::request::HeaderOp;
+use crate::headers::variables::VariableContext;
+use cdn_common::HeaderRule;
 
 /// Apply custom response header rules.
 /// Same logic as request rules — returns resolved HeaderOps.
-pub fn apply_response_rules(
-    rules: &[HeaderRule],
-    vars: &VariableContext,
-) -> Vec<HeaderOp> {
+pub fn apply_response_rules(rules: &[HeaderRule], vars: &VariableContext) -> Vec<HeaderOp> {
     rules
         .iter()
         .map(|rule| {
-            let value = rule
-                .value
-                .as_deref()
-                .map(|v| vars.substitute(v));
+            let value = rule.value.as_deref().map(|v| vars.substitute(v));
             HeaderOp {
                 action: rule.action.clone(),
                 name: rule.name.clone(),

@@ -84,7 +84,10 @@ pub fn validate_site_config(config: &SiteConfig) -> Vec<ValidationError> {
 
     // protocol.force_https.redirect_code
     if config.protocol.force_https.enable
-        && !matches!(config.protocol.force_https.redirect_code, 301 | 302 | 303 | 307 | 308)
+        && !matches!(
+            config.protocol.force_https.redirect_code,
+            301 | 302 | 303 | 307 | 308
+        )
     {
         errors.push(ValidationError {
             path: "protocol.force_https.redirect_code".to_string(),
@@ -102,16 +105,13 @@ pub fn validate_site_config(config: &SiteConfig) -> Vec<ValidationError> {
                 message: "must be between 1 and 100".to_string(),
             });
         }
-        if config.image_optimization.max_width == 0
-            || config.image_optimization.max_width > 16384
-        {
+        if config.image_optimization.max_width == 0 || config.image_optimization.max_width > 16384 {
             errors.push(ValidationError {
                 path: "image_optimization.max_width".to_string(),
                 message: "must be between 1 and 16384".to_string(),
             });
         }
-        if config.image_optimization.max_height == 0
-            || config.image_optimization.max_height > 16384
+        if config.image_optimization.max_height == 0 || config.image_optimization.max_height > 16384
         {
             errors.push(ValidationError {
                 path: "image_optimization.max_height".to_string(),

@@ -93,10 +93,7 @@ mod tests {
         let mut ctx = VariableContext::new();
         ctx.set("scheme", "https".to_string());
         ctx.set("host", "example.com".to_string());
-        assert_eq!(
-            ctx.substitute("${scheme}://${host}"),
-            "https://example.com"
-        );
+        assert_eq!(ctx.substitute("${scheme}://${host}"), "https://example.com");
     }
 
     #[test]
@@ -125,7 +122,12 @@ mod tests {
     #[test]
     fn test_build_request_variables() {
         let ctx = build_request_variables(
-            Some("1.2.3.4"), "req-123", "example.com", "/path", "https", "site1",
+            Some("1.2.3.4"),
+            "req-123",
+            "example.com",
+            "/path",
+            "https",
+            "site1",
         );
         assert_eq!(ctx.substitute("${client_ip}"), "1.2.3.4");
         assert_eq!(ctx.substitute("${request_id}"), "req-123");
@@ -135,7 +137,13 @@ mod tests {
     #[test]
     fn test_build_response_variables() {
         let ctx = build_response_variables(
-            Some("1.2.3.4"), "req-123", "example.com", "/path", "https", "site1", "HIT",
+            Some("1.2.3.4"),
+            "req-123",
+            "example.com",
+            "/path",
+            "https",
+            "site1",
+            "HIT",
         );
         assert_eq!(ctx.substitute("${cache_status}"), "HIT");
     }

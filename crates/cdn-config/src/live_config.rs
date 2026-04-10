@@ -23,7 +23,10 @@ impl LiveConfig {
             for domain in &site.domains {
                 let domain_lower = domain.to_lowercase();
                 if domain_lower.starts_with("*.") {
-                    if let Some(prev) = self.wildcard_index.insert(domain_lower.clone(), site_id.clone()) {
+                    if let Some(prev) = self
+                        .wildcard_index
+                        .insert(domain_lower.clone(), site_id.clone())
+                    {
                         if prev != *site_id {
                             log::warn!(
                                 "[Config] domain '{}' claimed by both site '{}' and '{}', using '{}'",
@@ -32,7 +35,10 @@ impl LiveConfig {
                         }
                     }
                 } else {
-                    if let Some(prev) = self.domain_index.insert(domain_lower.clone(), site_id.clone()) {
+                    if let Some(prev) = self
+                        .domain_index
+                        .insert(domain_lower.clone(), site_id.clone())
+                    {
                         if prev != *site_id {
                             log::warn!(
                                 "[Config] domain '{}' claimed by both site '{}' and '{}', using '{}'",
@@ -97,7 +103,11 @@ fn normalize_host(host: &str) -> String {
     } else {
         // IPv4 / hostname — strip trailing `:port` if present
         match host.rsplit_once(':') {
-            Some((before, port)) if !port.is_empty() && port.as_bytes().iter().all(|b| b.is_ascii_digit()) => before,
+            Some((before, port))
+                if !port.is_empty() && port.as_bytes().iter().all(|b| b.is_ascii_digit()) =>
+            {
+                before
+            }
             _ => host,
         }
     };
@@ -166,9 +176,10 @@ mod tests {
     #[test]
     fn test_exact_match() {
         let mut config = LiveConfig::default();
-        config
-            .sites
-            .insert("100".to_string(), Arc::new(make_site("100", vec!["example.com", "www.example.com"])));
+        config.sites.insert(
+            "100".to_string(),
+            Arc::new(make_site("100", vec!["example.com", "www.example.com"])),
+        );
         config.build_indexes();
 
         assert!(config.match_site("example.com").is_some());
@@ -179,9 +190,10 @@ mod tests {
     #[test]
     fn test_wildcard_match() {
         let mut config = LiveConfig::default();
-        config
-            .sites
-            .insert("200".to_string(), Arc::new(make_site("200", vec!["*.example.com"])));
+        config.sites.insert(
+            "200".to_string(),
+            Arc::new(make_site("200", vec!["*.example.com"])),
+        );
         config.build_indexes();
 
         assert!(config.match_site("foo.example.com").is_some());
@@ -195,9 +207,10 @@ mod tests {
     #[test]
     fn test_port_stripping() {
         let mut config = LiveConfig::default();
-        config
-            .sites
-            .insert("100".to_string(), Arc::new(make_site("100", vec!["example.com"])));
+        config.sites.insert(
+            "100".to_string(),
+            Arc::new(make_site("100", vec!["example.com"])),
+        );
         config.build_indexes();
 
         assert!(config.match_site("example.com:443").is_some());
@@ -207,9 +220,10 @@ mod tests {
     #[test]
     fn test_case_insensitive() {
         let mut config = LiveConfig::default();
-        config
-            .sites
-            .insert("100".to_string(), Arc::new(make_site("100", vec!["Example.COM"])));
+        config.sites.insert(
+            "100".to_string(),
+            Arc::new(make_site("100", vec!["Example.COM"])),
+        );
         config.build_indexes();
 
         assert!(config.match_site("example.com").is_some());

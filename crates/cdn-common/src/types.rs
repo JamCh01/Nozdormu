@@ -51,10 +51,16 @@ impl SiteConfig {
     /// Log warnings for contradictory or suspicious configuration.
     pub fn warn_invalid(&self) {
         if self.domains.is_empty() && self.enabled {
-            log::warn!("[Config] site '{}': enabled but has no domains", self.site_id);
+            log::warn!(
+                "[Config] site '{}': enabled but has no domains",
+                self.site_id
+            );
         }
         if self.origins.is_empty() && self.enabled {
-            log::warn!("[Config] site '{}': enabled but has no origins", self.site_id);
+            log::warn!(
+                "[Config] site '{}': enabled but has no origins",
+                self.site_id
+            );
         }
     }
 }
@@ -622,26 +628,66 @@ impl Default for TimeoutsConfig {
 // Default value functions
 // ============================================================
 
-fn default_true() -> bool { true }
-fn default_port() -> u16 { 80 }
-fn default_weight() -> u32 { 10 }
-fn default_retries() -> u32 { 2 }
-fn default_redirect_code() -> u16 { 301 }
-fn default_health_path() -> String { "/health".to_string() }
-fn default_health_interval() -> u64 { 10 }
-fn default_health_timeout() -> u64 { 5 }
-fn default_healthy_threshold() -> u32 { 2 }
-fn default_unhealthy_threshold() -> u32 { 3 }
-fn default_cache_ttl() -> u64 { 3600 }
-fn default_cache_max_size() -> u64 { 104_857_600 }
-fn default_ttl_unit() -> String { "seconds".to_string() }
-fn default_cc_rate() -> u64 { 100 }
-fn default_cc_window() -> u64 { 60 }
-fn default_cc_block_duration() -> u64 { 600 }
-fn default_cc_path() -> String { "/".to_string() }
-fn default_connect_timeout() -> u64 { 10 }
-fn default_send_timeout() -> u64 { 60 }
-fn default_read_timeout() -> u64 { 60 }
+fn default_true() -> bool {
+    true
+}
+fn default_port() -> u16 {
+    80
+}
+fn default_weight() -> u32 {
+    10
+}
+fn default_retries() -> u32 {
+    2
+}
+fn default_redirect_code() -> u16 {
+    301
+}
+fn default_health_path() -> String {
+    "/health".to_string()
+}
+fn default_health_interval() -> u64 {
+    10
+}
+fn default_health_timeout() -> u64 {
+    5
+}
+fn default_healthy_threshold() -> u32 {
+    2
+}
+fn default_unhealthy_threshold() -> u32 {
+    3
+}
+fn default_cache_ttl() -> u64 {
+    3600
+}
+fn default_cache_max_size() -> u64 {
+    104_857_600
+}
+fn default_ttl_unit() -> String {
+    "seconds".to_string()
+}
+fn default_cc_rate() -> u64 {
+    100
+}
+fn default_cc_window() -> u64 {
+    60
+}
+fn default_cc_block_duration() -> u64 {
+    600
+}
+fn default_cc_path() -> String {
+    "/".to_string()
+}
+fn default_connect_timeout() -> u64 {
+    10
+}
+fn default_send_timeout() -> u64 {
+    60
+}
+fn default_read_timeout() -> u64 {
+    60
+}
 
 // ============================================================
 // Compression
@@ -667,11 +713,15 @@ impl CompressionAlgorithm {
 
     /// Parse from `Accept-Encoding` token.
     pub fn from_token(token: &str) -> Option<Self> {
-        match token.trim().to_lowercase().as_str() {
-            "gzip" => Some(CompressionAlgorithm::Gzip),
-            "br" => Some(CompressionAlgorithm::Brotli),
-            "zstd" => Some(CompressionAlgorithm::Zstd),
-            _ => None,
+        let t = token.trim();
+        if t.eq_ignore_ascii_case("gzip") {
+            Some(CompressionAlgorithm::Gzip)
+        } else if t.eq_ignore_ascii_case("br") {
+            Some(CompressionAlgorithm::Brotli)
+        } else if t.eq_ignore_ascii_case("zstd") {
+            Some(CompressionAlgorithm::Zstd)
+        } else {
+            None
         }
     }
 }
@@ -710,8 +760,12 @@ fn default_compression_algorithms() -> Vec<CompressionAlgorithm> {
     ]
 }
 
-fn default_compression_level() -> u32 { 6 }
-fn default_compression_min_size() -> u64 { 256 }
+fn default_compression_level() -> u32 {
+    6
+}
+fn default_compression_min_size() -> u64 {
+    256
+}
 
 fn default_compressible_types() -> Vec<String> {
     vec![
@@ -764,12 +818,17 @@ impl ImageFormat {
 
     /// Parse from a string token (query param value).
     pub fn from_token(token: &str) -> Option<Self> {
-        match token.trim().to_lowercase().as_str() {
-            "avif" => Some(ImageFormat::Avif),
-            "webp" => Some(ImageFormat::WebP),
-            "jpeg" | "jpg" => Some(ImageFormat::Jpeg),
-            "png" => Some(ImageFormat::Png),
-            _ => None,
+        let t = token.trim();
+        if t.eq_ignore_ascii_case("avif") {
+            Some(ImageFormat::Avif)
+        } else if t.eq_ignore_ascii_case("webp") {
+            Some(ImageFormat::WebP)
+        } else if t.eq_ignore_ascii_case("jpeg") || t.eq_ignore_ascii_case("jpg") {
+            Some(ImageFormat::Jpeg)
+        } else if t.eq_ignore_ascii_case("png") {
+            Some(ImageFormat::Png)
+        } else {
+            None
         }
     }
 }
@@ -826,10 +885,18 @@ fn default_image_formats() -> Vec<ImageFormat> {
     vec![ImageFormat::Avif, ImageFormat::WebP]
 }
 
-fn default_image_quality() -> u32 { 80 }
-fn default_image_max_width() -> u32 { 4096 }
-fn default_image_max_height() -> u32 { 4096 }
-fn default_image_max_input_size() -> u64 { 50 * 1024 * 1024 } // 50 MB
+fn default_image_quality() -> u32 {
+    80
+}
+fn default_image_max_width() -> u32 {
+    4096
+}
+fn default_image_max_height() -> u32 {
+    4096
+}
+fn default_image_max_input_size() -> u64 {
+    50 * 1024 * 1024
+} // 50 MB
 
 fn default_image_optimizable_types() -> Vec<String> {
     vec![

@@ -12,11 +12,16 @@ fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
     REGEX_CACHE.with(|cache| {
         let (ref mut map, ref mut order) = *cache.borrow_mut();
         if let Some(re) = map.get(pattern) {
+            // LRU promotion: move to back of queue on access
+            if let Some(pos) = order.iter().position(|k| k == pattern) {
+                order.remove(pos);
+                order.push_back(pattern.to_string());
+            }
             return Some(re.clone());
         }
         match Regex::new(pattern) {
             Ok(re) => {
-                // LRU eviction: remove oldest entries when at capacity
+                // LRU eviction: remove least-recently-used when at capacity
                 while map.len() >= 256 {
                     if let Some(oldest) = order.pop_front() {
                         map.remove(&oldest);
@@ -26,7 +31,10 @@ fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
                 map.insert(pattern.to_string(), re.clone());
                 Some(re)
             }
-            Err(_) => None,
+            Err(e) => {
+                log::warn!("[Redirect] invalid regex pattern {:?}: {}", pattern, e);
+                None
+            }
         }
     })
 }
@@ -61,7 +69,10 @@ pub fn check_url_rules(
 
         // Method filter
         if !rule.methods.is_empty()
-            && !rule.methods.iter().any(|m| m.eq_ignore_ascii_case(req.method))
+            && !rule
+                .methods
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(req.method))
         {
             continue;
         }
@@ -77,7 +88,8 @@ pub fn check_url_rules(
             UrlRuleType::Exact => {
                 if match_input == source {
                     let target = substitute_variables(&rule.target, req, &[]);
-                    let target = append_query_string(&target, req.query_string, rule.preserve_query_string);
+                    let target =
+                        append_query_string(&target, req.query_string, rule.preserve_query_string);
                     return Some(make_result(target, rule));
                 }
             }
@@ -86,7 +98,8 @@ pub fn check_url_rules(
                     let remainder = &match_input[source.len()..];
                     let captures = vec![remainder.to_string()];
                     let target = substitute_variables(&rule.target, req, &captures);
-                    let target = append_query_string(&target, req.query_string, rule.preserve_query_string);
+                    let target =
+                        append_query_string(&target, req.query_string, rule.preserve_query_string);
                     return Some(make_result(target, rule));
                 }
             }
@@ -101,10 +114,18 @@ pub fn check_url_rules(
                 if let Some(re) = get_or_compile_regex(&pattern) {
                     if let Some(caps) = re.captures(match_input) {
                         let captures: Vec<String> = (1..caps.len())
-                            .map(|i| caps.get(i).map(|m| m.as_str().to_string()).unwrap_or_default())
+                            .map(|i| {
+                                caps.get(i)
+                                    .map(|m| m.as_str().to_string())
+                                    .unwrap_or_default()
+                            })
                             .collect();
                         let target = substitute_variables(&rule.target, req, &captures);
-                        let target = append_query_string(&target, req.query_string, rule.preserve_query_string);
+                        let target = append_query_string(
+                            &target,
+                            req.query_string,
+                            rule.preserve_query_string,
+                        );
                         return Some(make_result(target, rule));
                     }
                 }
@@ -113,7 +134,8 @@ pub fn check_url_rules(
                 let source_domain = rule.source_domain.as_deref().unwrap_or(source);
                 if let Some(captures) = match_domain(req.host, source_domain) {
                     let target = substitute_variables(&rule.target, req, &captures);
-                    let target = append_query_string(&target, req.query_string, rule.preserve_query_string);
+                    let target =
+                        append_query_string(&target, req.query_string, rule.preserve_query_string);
                     return Some(make_result(target, rule));
                 }
             }
@@ -386,7 +408,10 @@ mod tests {
         };
         assert!(check_url_rules(&r, &rules).is_none());
 
-        let r = RequestInfo { method: "POST", ..r };
+        let r = RequestInfo {
+            method: "POST",
+            ..r
+        };
         assert!(check_url_rules(&r, &rules).is_some());
     }
 

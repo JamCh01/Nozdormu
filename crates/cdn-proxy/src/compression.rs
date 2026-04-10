@@ -123,22 +123,23 @@ impl Encoder {
     ///
     /// The encoder may buffer data internally; not every input chunk
     /// produces output. Call `finish()` to flush the final bytes.
-    pub fn write_chunk(&mut self, data: &[u8]) -> Vec<u8> {
+    /// Returns Err on write/flush failure — caller should stop compressing.
+    pub fn write_chunk(&mut self, data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
         match self {
             Encoder::Gzip(enc) => {
-                enc.write_all(data).ok();
-                enc.flush().ok();
-                enc.get_mut().drain(..).collect()
+                enc.write_all(data)?;
+                enc.flush()?;
+                Ok(std::mem::take(enc.get_mut()))
             }
             Encoder::Brotli(enc) => {
-                enc.write_all(data).ok();
-                enc.flush().ok();
-                enc.get_mut().drain(..).collect()
+                enc.write_all(data)?;
+                enc.flush()?;
+                Ok(std::mem::take(enc.get_mut()))
             }
             Encoder::Zstd(enc) => {
-                enc.write_all(data).ok();
-                enc.flush().ok();
-                enc.get_mut().drain(..).collect()
+                enc.write_all(data)?;
+                enc.flush()?;
+                Ok(std::mem::take(enc.get_mut()))
             }
         }
     }
@@ -183,7 +184,7 @@ mod tests {
     #[test]
     fn test_negotiate_prefers_server_order() {
         let config = test_config(); // server order: zstd, br, gzip
-        // Client supports all three
+                                    // Client supports all three
         let result = negotiate("gzip, br, zstd", &config);
         assert_eq!(result, Some(CompressionAlgorithm::Zstd));
     }
@@ -296,7 +297,7 @@ mod tests {
     fn test_gzip_roundtrip() {
         let data = b"Hello, World! This is a test of gzip compression.";
         let mut encoder = Encoder::new(&CompressionAlgorithm::Gzip, 6);
-        let chunk = encoder.write_chunk(data);
+        let chunk = encoder.write_chunk(data).unwrap();
         let final_bytes = encoder.finish();
 
         let compressed: Vec<u8> = [chunk, final_bytes].concat();
@@ -315,7 +316,7 @@ mod tests {
     fn test_brotli_roundtrip() {
         let data = b"Hello, World! This is a test of Brotli compression.";
         let mut encoder = Encoder::new(&CompressionAlgorithm::Brotli, 6);
-        let chunk = encoder.write_chunk(data);
+        let chunk = encoder.write_chunk(data).unwrap();
         let final_bytes = encoder.finish();
 
         let compressed: Vec<u8> = [chunk, final_bytes].concat();
@@ -331,7 +332,7 @@ mod tests {
     fn test_zstd_roundtrip() {
         let data = b"Hello, World! This is a test of Zstandard compression.";
         let mut encoder = Encoder::new(&CompressionAlgorithm::Zstd, 6);
-        let chunk = encoder.write_chunk(data);
+        let chunk = encoder.write_chunk(data).unwrap();
         let final_bytes = encoder.finish();
 
         let compressed: Vec<u8> = [chunk, final_bytes].concat();
@@ -354,7 +355,7 @@ mod tests {
         let mut encoder = Encoder::new(&CompressionAlgorithm::Gzip, 6);
         let mut compressed = Vec::new();
         for chunk in &chunks {
-            compressed.extend(encoder.write_chunk(chunk));
+            compressed.extend(encoder.write_chunk(chunk).unwrap());
         }
         compressed.extend(encoder.finish());
 

@@ -3,7 +3,7 @@ pub mod geo;
 pub mod ip;
 
 use cdn_common::{WafConfig, WafMode};
-use geo::{GeoIpDb, GeoInfo};
+use geo::{GeoInfo, GeoIpDb};
 use ip::IpCidrSet;
 use once_cell::sync::Lazy;
 use prometheus::{register_int_counter_vec, IntCounterVec};
@@ -187,7 +187,11 @@ impl WafEngine {
         if !rules.country_whitelist.is_empty() {
             match &geo.country_code {
                 Some(cc) => {
-                    if !rules.country_whitelist.iter().any(|w| w.eq_ignore_ascii_case(cc)) {
+                    if !rules
+                        .country_whitelist
+                        .iter()
+                        .any(|w| w.eq_ignore_ascii_case(cc))
+                    {
                         let result = self.make_result(
                             &waf.mode,
                             "country_whitelist",
@@ -212,7 +216,11 @@ impl WafEngine {
 
         // ── Step 5: Country blacklist ──
         if let Some(cc) = &geo.country_code {
-            if rules.country_blacklist.iter().any(|b| b.eq_ignore_ascii_case(cc)) {
+            if rules
+                .country_blacklist
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(cc))
+            {
                 let result = self.make_result(
                     &waf.mode,
                     "country_blacklist",
@@ -225,7 +233,11 @@ impl WafEngine {
 
         // ── Step 5.5: Continent blacklist ──
         if let Some(cont) = &geo.continent_code {
-            if rules.continent_blacklist.iter().any(|b| b.eq_ignore_ascii_case(cont)) {
+            if rules
+                .continent_blacklist
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(cont))
+            {
                 let result = self.make_result(
                     &waf.mode,
                     "continent_blacklist",
@@ -240,10 +252,13 @@ impl WafEngine {
         if let Some(cc) = &geo.country_code {
             let cc_upper = cc.to_uppercase();
             // Case-insensitive lookup: try both the uppercase key and iterate for mismatch
-            let blocked_regions = rules.region_blacklist.get(&cc_upper)
-                .or_else(|| rules.region_blacklist.iter()
+            let blocked_regions = rules.region_blacklist.get(&cc_upper).or_else(|| {
+                rules
+                    .region_blacklist
+                    .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case(&cc_upper))
-                    .map(|(_, v)| v));
+                    .map(|(_, v)| v)
+            });
             if let Some(blocked_regions) = blocked_regions {
                 if let Some(sub) = &geo.subdivision_code {
                     if blocked_regions.iter().any(|r| r.eq_ignore_ascii_case(sub)) {
@@ -272,17 +287,23 @@ impl WafEngine {
     ) -> WafResult {
         match mode {
             WafMode::Block => {
-                WAF_BLOCKED
-                    .with_label_values(&[site_id, block_type])
-                    .inc();
-                log::warn!("[WAF] BLOCK site={} type={} reason={}", site_id, block_type, reason);
+                WAF_BLOCKED.with_label_values(&[site_id, block_type]).inc();
+                log::warn!(
+                    "[WAF] BLOCK site={} type={} reason={}",
+                    site_id,
+                    block_type,
+                    reason
+                );
                 WafResult::Block { block_type, reason }
             }
             WafMode::Log => {
-                WAF_BLOCKED
-                    .with_label_values(&[site_id, block_type])
-                    .inc();
-                log::info!("[WAF] LOG site={} type={} reason={}", site_id, block_type, reason);
+                WAF_BLOCKED.with_label_values(&[site_id, block_type]).inc();
+                log::info!(
+                    "[WAF] LOG site={} type={} reason={}",
+                    site_id,
+                    block_type,
+                    reason
+                );
                 WafResult::Log { block_type, reason }
             }
         }
@@ -393,7 +414,10 @@ mod tests {
         });
         let (result, _) = e.check(ip("8.8.8.8"), &waf, "site1");
         assert!(result.is_blocked());
-        if let WafResult::Block { block_type, reason, .. } = result {
+        if let WafResult::Block {
+            block_type, reason, ..
+        } = result
+        {
             assert_eq!(block_type, "country_whitelist");
             assert!(reason.contains("unknown"));
         }

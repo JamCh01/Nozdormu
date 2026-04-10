@@ -1,6 +1,6 @@
-pub mod mp4_parse;
 pub mod fmp4_gen;
 pub mod hls_manifest;
+pub mod mp4_parse;
 
 /// What type of packaging sub-resource is being requested.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,12 +56,8 @@ pub fn process_packaging_request(
             if *index >= segment_count {
                 return Err(PackagingError::SegmentOutOfRange(*index, segment_count));
             }
-            let segment = fmp4_gen::generate_media_segment(
-                mp4_data,
-                &metadata,
-                *index,
-                segment_duration,
-            )?;
+            let segment =
+                fmp4_gen::generate_media_segment(mp4_data, &metadata, *index, segment_duration)?;
             Ok(segment)
         }
     }
@@ -74,9 +70,7 @@ fn filter_query_params(query: Option<&str>) -> String {
         Some(q) => {
             let filtered: Vec<&str> = q
                 .split('&')
-                .filter(|p| {
-                    !p.starts_with("format=") && !p.starts_with("segment=")
-                })
+                .filter(|p| !p.starts_with("format=") && !p.starts_with("segment="))
                 .collect();
             if filtered.is_empty() {
                 String::new()
@@ -111,9 +105,6 @@ mod tests {
 
     #[test]
     fn test_filter_query_params_preserved() {
-        assert_eq!(
-            filter_query_params(Some("a=1&b=2")),
-            "&a=1&b=2"
-        );
+        assert_eq!(filter_query_params(Some("a=1&b=2")), "&a=1&b=2");
     }
 }

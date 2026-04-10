@@ -1,5 +1,5 @@
 use crate::balancer::DynamicBalancer;
-use crate::context::{CacheStatus, ProxyCtx, ProtocolType};
+use crate::context::{CacheStatus, ProtocolType, ProxyCtx};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,8 +11,8 @@ use pingora::http::ResponseHeader;
 use pingora::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 /// Global monotonic counter for WAF sets cache versioning.
 /// Incremented each time a new SiteConfig Arc is seen, preventing ABA reuse.
@@ -37,8 +37,17 @@ fn get_compiled_waf_sets(site: &Arc<cdn_common::SiteConfig>) -> Arc<CompiledWafS
         let version = WAF_CACHE_VERSION.fetch_add(1, AtomicOrdering::Relaxed);
         let sets = Arc::new(CompiledWafSets::build(&site.waf));
         // Evict stale entries (keep max 64 per thread)
+        // Evict stale entries: keep only entries matching current pointer,
+        // then if still over limit, drop oldest half by version
         if cache.len() > 64 {
-            cache.clear();
+            cache.retain(|(p, _), _| *p == ptr);
+            if cache.len() > 64 {
+                let mut keys: Vec<_> = cache.keys().cloned().collect();
+                keys.sort_by_key(|(_, v)| *v);
+                for key in keys.iter().take(keys.len() / 2) {
+                    cache.remove(key);
+                }
+            }
         }
         cache.insert((ptr, version), Arc::clone(&sets));
         sets
@@ -60,6 +69,7 @@ pub struct CdnProxy {
     pub default_compression: cdn_common::CompressionConfig,
     pub default_image_optimization: cdn_common::ImageOptimizationConfig,
     pub prefetch_worker: Arc<cdn_streaming::prefetch::PrefetchWorker>,
+    pub node_id: Arc<str>,
 }
 
 #[async_trait]
@@ -70,11 +80,7 @@ impl ProxyHttp for CdnProxy {
         ProxyCtx::default()
     }
 
-    async fn request_filter(
-        &self,
-        session: &mut Session,
-        ctx: &mut Self::CTX,
-    ) -> Result<bool> {
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let path = session.req_header().uri.path();
 
         // ── 1. Public endpoints (before routing) ──
@@ -102,7 +108,10 @@ impl ProxyHttp for CdnProxy {
                 .client_addr()
                 .and_then(|a| a.as_inet())
                 .map(|a| a.ip());
-            if !remote.map(|ip| crate::utils::ip::is_private_ip(ip)).unwrap_or(false) {
+            if !remote
+                .map(|ip| crate::utils::ip::is_private_ip(ip))
+                .unwrap_or(false)
+            {
                 return self.serve_forbidden(session).await;
             }
             if path == "/health/detail" {
@@ -121,9 +130,17 @@ impl ProxyHttp for CdnProxy {
         // XFF anti-spoofing
         if let (Some(remote_ip), Some(xff)) = (
             ctx.client_ip,
-            session.req_header().headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+            session
+                .req_header()
+                .headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok()),
         ) {
-            ctx.client_ip = Some(crate::utils::ip::real_ip_from_xff(xff, remote_ip, &self.trusted_proxies));
+            ctx.client_ip = Some(crate::utils::ip::real_ip_from_xff(
+                xff,
+                remote_ip,
+                &self.trusted_proxies,
+            ));
         }
 
         // ── 5. Route matching ──
@@ -175,11 +192,13 @@ impl ProxyHttp for CdnProxy {
         if let Some(ref site) = ctx.site_config {
             if let Some(client_ip) = ctx.client_ip {
                 let waf_sets = get_compiled_waf_sets(site);
-                let (waf_result, geo_info) =
-                    self.waf_engine.check_with_sets(
-                        client_ip, &site.waf, &ctx.site_id,
-                        Some(&waf_sets.whitelist), Some(&waf_sets.blacklist),
-                    );
+                let (waf_result, geo_info) = self.waf_engine.check_with_sets(
+                    client_ip,
+                    &site.waf,
+                    &ctx.site_id,
+                    Some(&waf_sets.whitelist),
+                    Some(&waf_sets.blacklist),
+                );
 
                 // Cache GeoIP info in context (queried once per request)
                 if let Some(geo) = geo_info {
@@ -278,19 +297,27 @@ impl ProxyHttp for CdnProxy {
                     .await;
 
                 match cc_result {
-                    CcActionResult::Block { retry_after, reason } => {
+                    CcActionResult::Block {
+                        retry_after,
+                        reason,
+                    } => {
                         ctx.cc_blocked = true;
                         ctx.cc_reason = Some(reason);
                         return self.serve_too_many_requests(session, retry_after).await;
                     }
-                    CcActionResult::Challenge { cookie_value, reason } => {
+                    CcActionResult::Challenge {
+                        cookie_value,
+                        reason,
+                    } => {
                         ctx.cc_reason = Some(reason);
                         return self.serve_challenge(session, &cookie_value).await;
                     }
                     CcActionResult::Delay { delay_ms, reason } => {
                         ctx.cc_reason = Some(reason);
                         // Return 429 instead of sleeping to prevent task queue saturation under DDoS
-                        return self.serve_too_many_requests(session, (delay_ms / 1000).max(1)).await;
+                        return self
+                            .serve_too_many_requests(session, (delay_ms / 1000).max(1))
+                            .await;
                     }
                     CcActionResult::Log { reason } => {
                         ctx.cc_reason = Some(reason);
@@ -306,11 +333,7 @@ impl ProxyHttp for CdnProxy {
             if site.streaming.auth.enabled {
                 let path = session.req_header().uri.path();
                 let query = session.req_header().uri.query();
-                match cdn_streaming::auth::validate_url(
-                    &site.streaming.auth,
-                    path,
-                    query,
-                ) {
+                match cdn_streaming::auth::validate_url(&site.streaming.auth, path, query) {
                     Ok(cleaned_path) => {
                         ctx.auth_cleaned_path = Some(cleaned_path);
                         crate::logging::metrics::STREAMING_AUTH_TOTAL
@@ -318,10 +341,7 @@ impl ProxyHttp for CdnProxy {
                             .inc();
                     }
                     Err(e) => {
-                        log::warn!(
-                            "[Auth] URL signing validation failed: {}, path={}",
-                            e, path
-                        );
+                        log::warn!("[Auth] URL signing validation failed: {}, path={}", e, path);
                         crate::logging::metrics::STREAMING_AUTH_TOTAL
                             .with_label_values(&[ctx.site_id.as_str(), "rejected"])
                             .inc();
@@ -350,7 +370,13 @@ impl ProxyHttp for CdnProxy {
                 &site.url_redirect_rules,
             ) {
                 return self
-                    .serve_redirect(session, &result.target_url, result.status_code, result.response_headers, result.cache_control.as_deref())
+                    .serve_redirect(
+                        session,
+                        &result.target_url,
+                        result.status_code,
+                        result.response_headers,
+                        result.cache_control.as_deref(),
+                    )
                     .await;
             }
         }
@@ -494,13 +520,10 @@ impl ProxyHttp for CdnProxy {
 
                 if is_hls_query || is_hls_accept {
                     // Determine what sub-resource is requested
-                    let segment_param = query.and_then(|q| {
-                        q.split('&').find_map(|p| p.strip_prefix("segment="))
-                    });
+                    let segment_param =
+                        query.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("segment=")));
                     ctx.packaging_request = Some(match segment_param {
-                        Some("init") => {
-                            cdn_streaming::packaging::PackagingRequest::InitSegment
-                        }
+                        Some("init") => cdn_streaming::packaging::PackagingRequest::InitSegment,
                         Some(n) => match n.parse::<u32>() {
                             Ok(idx) => {
                                 cdn_streaming::packaging::PackagingRequest::MediaSegment(idx)
@@ -742,9 +765,7 @@ impl ProxyHttp for CdnProxy {
                 .get("range")
                 .and_then(|v| v.to_str().ok())
             {
-                upstream_request
-                    .insert_header("Range", range_val)
-                    .ok();
+                upstream_request.insert_header("Range", range_val).ok();
             }
         } else if ctx.range_request.is_some() && ctx.image_params.is_some() {
             // Range + image optimization conflict: image wins
@@ -764,9 +785,7 @@ impl ProxyHttp for CdnProxy {
     ) -> Result<()> {
         // Sensitive header removal (always, not configurable)
         upstream_response.remove_header("X-Powered-By");
-        upstream_response
-            .insert_header("Server", "CDN")
-            .ok();
+        upstream_response.insert_header("Server", "CDN").ok();
 
         // Auto headers
         upstream_response
@@ -894,10 +913,7 @@ impl ProxyHttp for CdnProxy {
 
         // ── Prefetch manifest detection ──
         if let Some(ref site) = ctx.site_config {
-            if site.streaming.prefetch.enabled
-                && !ctx.packaging_buffering
-                && !ctx.image_buffering
-            {
+            if site.streaming.prefetch.enabled && !ctx.packaging_buffering && !ctx.image_buffering {
                 let content_type = upstream_response
                     .headers
                     .get("content-type")
@@ -907,12 +923,10 @@ impl ProxyHttp for CdnProxy {
                 if content_type.contains("application/vnd.apple.mpegurl")
                     || content_type.contains("audio/mpegurl")
                 {
-                    ctx.prefetch_manifest_type =
-                        Some(crate::context::ManifestType::Hls);
+                    ctx.prefetch_manifest_type = Some(crate::context::ManifestType::Hls);
                     ctx.prefetch_buffering = true;
                 } else if content_type.contains("application/dash+xml") {
-                    ctx.prefetch_manifest_type =
-                        Some(crate::context::ManifestType::Dash);
+                    ctx.prefetch_manifest_type = Some(crate::context::ManifestType::Dash);
                     ctx.prefetch_buffering = true;
                 }
             }
@@ -960,10 +974,8 @@ impl ProxyHttp for CdnProxy {
                             .and_then(|v| v.to_str().ok())
                             .unwrap_or("");
 
-                        let explicit_fmt = ctx
-                            .image_params
-                            .as_ref()
-                            .and_then(|p| p.format.as_ref());
+                        let explicit_fmt =
+                            ctx.image_params.as_ref().and_then(|p| p.format.as_ref());
 
                         let (output_format, auto_negotiated) =
                             cdn_image::negotiate_format(accept, explicit_fmt, config, content_type);
@@ -975,9 +987,7 @@ impl ProxyHttp for CdnProxy {
                         upstream_response.remove_header("Content-Length");
 
                         if auto_negotiated {
-                            upstream_response
-                                .insert_header("Vary", "Accept")
-                                .ok();
+                            upstream_response.insert_header("Vary", "Accept").ok();
                             ctx.image_auto_negotiated = true;
                         }
 
@@ -1007,10 +1017,7 @@ impl ProxyHttp for CdnProxy {
             && matches!(ctx.protocol_type, ProtocolType::Http)
         {
             // Skip if upstream already compressed
-            let already_encoded = upstream_response
-                .headers
-                .get("content-encoding")
-                .is_some();
+            let already_encoded = upstream_response.headers.get("content-encoding").is_some();
 
             if !already_encoded {
                 // Get effective compression config: site > global default
@@ -1058,9 +1065,7 @@ impl ProxyHttp for CdnProxy {
                             .and_then(|v| v.to_str().ok())
                             .unwrap_or("");
 
-                        if let Some(algo) =
-                            crate::compression::negotiate(accept, config)
-                        {
+                        if let Some(algo) = crate::compression::negotiate(accept, config) {
                             upstream_response
                                 .insert_header("Content-Encoding", algo.encoding_token())
                                 .ok();
@@ -1072,10 +1077,8 @@ impl ProxyHttp for CdnProxy {
                                     .ok();
                             }
                             ctx.compression_algorithm = Some(algo.clone());
-                            ctx.compressor = Some(crate::compression::Encoder::new(
-                                &algo,
-                                config.level,
-                            ));
+                            ctx.compressor =
+                                Some(crate::compression::Encoder::new(&algo, config.level));
                         }
                     }
                 }
@@ -1116,7 +1119,10 @@ impl ProxyHttp for CdnProxy {
                             let sliced = crate::range::slice_body(&full_body, start, end);
                             log::debug!(
                                 "[Range] sliced origin 200: bytes {}-{}/{} ({} bytes)",
-                                start, end, total, sliced.len()
+                                start,
+                                end,
+                                total,
+                                sliced.len()
                             );
                             *body = Some(Bytes::from(sliced));
                         }
@@ -1161,9 +1167,7 @@ impl ProxyHttp for CdnProxy {
                             Some(cdn_streaming::packaging::PackagingRequest::Manifest) => {
                                 "manifest"
                             }
-                            Some(cdn_streaming::packaging::PackagingRequest::InitSegment) => {
-                                "init"
-                            }
+                            Some(cdn_streaming::packaging::PackagingRequest::InitSegment) => "init",
                             Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
                                 "segment"
                             }
@@ -1207,16 +1211,10 @@ impl ProxyHttp for CdnProxy {
                     let base_url = format!("{}://{}{}", ctx.scheme, ctx.host, ctx.uri);
                     let segments = match ctx.prefetch_manifest_type {
                         Some(crate::context::ManifestType::Hls) => {
-                            cdn_streaming::prefetch::extract_hls_segments(
-                                manifest_str,
-                                &base_url,
-                            )
+                            cdn_streaming::prefetch::extract_hls_segments(manifest_str, &base_url)
                         }
                         Some(crate::context::ManifestType::Dash) => {
-                            cdn_streaming::prefetch::extract_dash_segments(
-                                manifest_str,
-                                &base_url,
-                            )
+                            cdn_streaming::prefetch::extract_dash_segments(manifest_str, &base_url)
                         }
                         None => vec![],
                     };
@@ -1297,10 +1295,7 @@ impl ProxyHttp for CdnProxy {
                                 *body = Some(Bytes::from(processed));
                             }
                             Err(e) => {
-                                log::warn!(
-                                    "[Image] processing failed: {}, passing through",
-                                    e
-                                );
+                                log::warn!("[Image] processing failed: {}, passing through", e);
                                 crate::logging::metrics::IMAGE_OPTIMIZATIONS_TOTAL
                                     .with_label_values(&[
                                         ctx.site_id.as_str(),
@@ -1320,11 +1315,26 @@ impl ProxyHttp for CdnProxy {
         // ── Compression path ──
         if let Some(ref mut encoder) = ctx.compressor {
             if let Some(data) = body.take() {
-                let compressed = encoder.write_chunk(&data);
-                if !compressed.is_empty() {
-                    *body = Some(Bytes::from(compressed));
-                } else {
-                    *body = Some(Bytes::new());
+                match encoder.write_chunk(&data) {
+                    Ok(compressed) => {
+                        if !compressed.is_empty() {
+                            *body = Some(Bytes::from(compressed));
+                        } else {
+                            *body = Some(Bytes::new());
+                        }
+                    }
+                    Err(e) => {
+                        // Compression failed mid-stream. The response is already partially
+                        // compressed, so the client will see a corrupt stream regardless.
+                        // Stop compressing and pass through remaining data uncompressed.
+                        // The client's decoder will fail and trigger a retry.
+                        log::error!(
+                            "[Compression] write_chunk failed: {}, disabling compression",
+                            e
+                        );
+                        ctx.compressor = None;
+                        *body = Some(data);
+                    }
                 }
             }
             if end_of_stream {
@@ -1373,9 +1383,13 @@ impl ProxyHttp for CdnProxy {
         // Passive health check
         if let Some(ref origin) = ctx.selected_origin {
             if status >= 500 || status == 0 {
-                self.balancer.health.record_failure(&ctx.site_id, &origin.id);
+                self.balancer
+                    .health
+                    .record_failure(&ctx.site_id, &origin.id);
             } else {
-                self.balancer.health.record_success(&ctx.site_id, &origin.id);
+                self.balancer
+                    .health
+                    .record_success(&ctx.site_id, &origin.id);
             }
         }
 
@@ -1390,13 +1404,15 @@ impl ProxyHttp for CdnProxy {
             })
             .unwrap_or(0);
 
+        let duration_ms = ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+
         crate::logging::metrics::record_request(
             &ctx.site_id,
             method,
             status,
             ctx.cache_status.as_str(),
             response_size,
-            0.0, // TODO: track actual duration with Instant in ctx
+            duration_ms,
             ctx.selected_origin.as_ref().map(|o| o.id.as_str()),
         );
 
@@ -1415,7 +1431,7 @@ impl ProxyHttp for CdnProxy {
             asn: ctx.geo_info.as_ref().and_then(|g| g.asn),
             status,
             response_size,
-            duration_ms: 0.0, // TODO: track actual duration
+            duration_ms,
             site_id: ctx.site_id.clone(),
             cache_status: ctx.cache_status.as_str().to_string(),
             cache_key: ctx.cache_key.clone(),
@@ -1429,7 +1445,7 @@ impl ProxyHttp for CdnProxy {
             packaging_request: ctx.packaging_request.is_some(),
             auth_validated: ctx.auth_cleaned_path.is_some(),
             body_rejected: ctx.body_rejected,
-            node_id: String::new(), // TODO: inject from NodeConfig
+            node_id: self.node_id.to_string(),
         });
     }
 
@@ -1450,13 +1466,17 @@ impl ProxyHttp for CdnProxy {
 
         // Record failure for passive health check
         if let Some(ref origin) = ctx.selected_origin {
-            self.balancer.health.record_failure(&ctx.site_id, &origin.id);
+            self.balancer
+                .health
+                .record_failure(&ctx.site_id, &origin.id);
         }
 
         if ctx.balancer_tried < max_retries {
             log::warn!(
                 "[Balancer] connect failed, retrying ({}/{}): {}",
-                ctx.balancer_tried, max_retries, e
+                ctx.balancer_tried,
+                max_retries,
+                e
             );
             let mut e = e;
             e.set_retry(true);
@@ -1465,7 +1485,9 @@ impl ProxyHttp for CdnProxy {
 
         log::error!(
             "[Balancer] connect failed, no more retries ({}/{}): {}",
-            ctx.balancer_tried, max_retries, e
+            ctx.balancer_tried,
+            max_retries,
+            e
         );
         e
     }
@@ -1477,8 +1499,12 @@ impl CdnProxy {
     async fn serve_health(&self, session: &mut Session) -> Result<bool> {
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some("OK\n".into()), true).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some("OK\n".into()), true)
+            .await?;
         Ok(true)
     }
 
@@ -1486,7 +1512,9 @@ impl CdnProxy {
         let body = format!("Bad Request: {}\n", reason);
         let mut header = ResponseHeader::build(400, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
@@ -1495,8 +1523,12 @@ impl CdnProxy {
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "text/plain")?;
         header.insert_header("Content-Length", &key_auth.len().to_string())?;
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some(key_auth.to_string().into()), true).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some(key_auth.to_string().into()), true)
+            .await?;
         Ok(true)
     }
 
@@ -1514,7 +1546,9 @@ impl CdnProxy {
         let body = serde_json::to_string_pretty(&detail).unwrap_or_default();
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "application/json")?;
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
@@ -1528,7 +1562,9 @@ impl CdnProxy {
         let body = serde_json::to_string_pretty(&status).unwrap_or_default();
         let mut header = ResponseHeader::build(200, None)?;
         header.insert_header("Content-Type", "application/json")?;
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
@@ -1536,16 +1572,24 @@ impl CdnProxy {
     async fn serve_not_found(&self, session: &mut Session) -> Result<bool> {
         let mut header = ResponseHeader::build(404, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some("Not Found\n".into()), true).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some("Not Found\n".into()), true)
+            .await?;
         Ok(true)
     }
 
     async fn serve_forbidden(&self, session: &mut Session) -> Result<bool> {
         let mut header = ResponseHeader::build(403, None)?;
         header.insert_header("Content-Type", "text/plain")?;
-        session.write_response_header(Box::new(header), false).await?;
-        session.write_response_body(Some("Forbidden\n".into()), true).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
+        session
+            .write_response_body(Some("Forbidden\n".into()), true)
+            .await?;
         Ok(true)
     }
 
@@ -1567,9 +1611,7 @@ impl CdnProxy {
         session
             .write_response_header(Box::new(header), false)
             .await?;
-        session
-            .write_response_body(Some(body.into()), true)
-            .await?;
+        session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
 
@@ -1581,28 +1623,26 @@ impl CdnProxy {
         let mut header = ResponseHeader::build(429, None)?;
         header.insert_header("Content-Type", "text/plain")?;
         header.insert_header("Retry-After", &retry_after.to_string())?;
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session
             .write_response_body(Some("Too Many Requests\n".into()), true)
             .await?;
         Ok(true)
     }
 
-    async fn serve_challenge(
-        &self,
-        session: &mut Session,
-        cookie_value: &str,
-    ) -> Result<bool> {
+    async fn serve_challenge(&self, session: &mut Session, cookie_value: &str) -> Result<bool> {
         use cdn_middleware::cc::action::ChallengeManager;
         let html = ChallengeManager::challenge_html(cookie_value);
         let mut header = ResponseHeader::build(503, None)?;
         header.insert_header("Content-Type", "text/html; charset=utf-8")?;
         header.insert_header("Content-Length", &html.len().to_string())?;
         header.insert_header("Cache-Control", "no-store")?;
-        session.write_response_header(Box::new(header), false).await?;
         session
-            .write_response_body(Some(html.into()), true)
+            .write_response_header(Box::new(header), false)
             .await?;
+        session.write_response_body(Some(html.into()), true).await?;
         Ok(true)
     }
 
@@ -1628,7 +1668,9 @@ impl CdnProxy {
                 header.headers.insert(hn, hv);
             }
         }
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session.write_response_body(Some("".into()), true).await?;
         Ok(true)
     }
@@ -1646,7 +1688,9 @@ impl CdnProxy {
             crate::range::content_range_unsatisfied(total_size),
         )?;
         header.insert_header("Accept-Ranges", "bytes")?;
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session
             .write_response_body(Some("Range Not Satisfiable\n".into()), true)
             .await?;
@@ -1682,7 +1726,9 @@ impl CdnProxy {
                 header.insert_header(n, v).ok();
             }
         }
-        session.write_response_header(Box::new(header), false).await?;
+        session
+            .write_response_header(Box::new(header), false)
+            .await?;
         session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
@@ -1695,10 +1741,7 @@ impl CdnProxy {
 /// for original-case serialization that panics if out of sync with the HeaderMap.
 macro_rules! impl_apply_header_op {
     ($fn_name:ident, $header_type:ty) => {
-        fn $fn_name(
-            header: &mut $header_type,
-            op: &cdn_middleware::headers::request::HeaderOp,
-        ) {
+        fn $fn_name(header: &mut $header_type, op: &cdn_middleware::headers::request::HeaderOp) {
             use cdn_common::HeaderAction;
             let name = op.name.clone();
             match &op.action {

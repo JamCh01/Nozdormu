@@ -24,12 +24,7 @@ static CC_BLOCKED: Lazy<IntCounterVec> = Lazy::new(|| {
 });
 
 static CC_REQUESTS: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "cdn_cc_requests_total",
-        "CC checked requests",
-        &["site_id"]
-    )
-    .unwrap()
+    register_int_counter_vec!("cdn_cc_requests_total", "CC checked requests", &["site_id"]).unwrap()
 });
 
 /// CC protection engine.
@@ -115,9 +110,21 @@ impl CcEngine {
             } else {
                 // Use site config values when set (non-zero), fall back to engine defaults
                 (
-                    if cc.default_rate > 0 { cc.default_rate } else { self.default_rate },
-                    if cc.default_window > 0 { cc.default_window } else { self.default_window },
-                    if cc.default_block_duration > 0 { cc.default_block_duration } else { self.default_block_duration },
+                    if cc.default_rate > 0 {
+                        cc.default_rate
+                    } else {
+                        self.default_rate
+                    },
+                    if cc.default_window > 0 {
+                        cc.default_window
+                    } else {
+                        self.default_window
+                    },
+                    if cc.default_block_duration > 0 {
+                        cc.default_block_duration
+                    } else {
+                        self.default_block_duration
+                    },
                     &cc.default_action,
                     &cdn_common::CcKeyType::IpUrl,
                 )
@@ -164,7 +171,12 @@ impl CcEngine {
         // Rate exceeded — apply action
         log::warn!(
             "[CC] rate exceeded: site={} ip={} path={} count={}/{} window={}s",
-            site_id, client_ip, path, count, rate, window
+            site_id,
+            client_ip,
+            path,
+            count,
+            rate,
+            window
         );
 
         match action {
@@ -254,7 +266,14 @@ mod tests {
         let e = engine();
         let cc = CcConfig::default();
         let result = e
-            .check("1.2.3.4".parse().unwrap(), "/api", "/api", None, &cc, "site1")
+            .check(
+                "1.2.3.4".parse().unwrap(),
+                "/api",
+                "/api",
+                None,
+                &cc,
+                "site1",
+            )
             .await;
         assert!(matches!(result, CcActionResult::Allow));
     }

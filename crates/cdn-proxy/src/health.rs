@@ -91,7 +91,8 @@ impl HealthChecker {
         if h.consecutive_successes >= self.healthy_threshold && !h.healthy {
             log::info!(
                 "[Health] origin recovered: site={} origin={}",
-                site_id, origin_id
+                site_id,
+                origin_id
             );
             h.healthy = true;
         }
@@ -110,7 +111,9 @@ impl HealthChecker {
             h.healthy = false;
             log::warn!(
                 "[Health] origin marked unhealthy: site={} origin={} failures={}",
-                site_id, origin_id, h.consecutive_failures
+                site_id,
+                origin_id,
+                h.consecutive_failures
             );
         }
     }

@@ -43,10 +43,7 @@ impl EtcdConfigManager {
         let opts = etcd_client::GetOptions::new().with_prefix();
         let resp = client.get(prefix.as_bytes(), Some(opts)).await?;
 
-        let revision = resp
-            .header()
-            .map(|h| h.revision())
-            .unwrap_or(0);
+        let revision = resp.header().map(|h| h.revision()).unwrap_or(0);
         self.last_revision.fetch_max(revision, Ordering::SeqCst);
 
         let mut sites: HashMap<String, Arc<SiteConfig>> = HashMap::new();
@@ -59,10 +56,7 @@ impl EtcdConfigManager {
                     continue;
                 }
             };
-            let site_id = key
-                .strip_prefix(&prefix)
-                .unwrap_or("")
-                .to_string();
+            let site_id = key.strip_prefix(&prefix).unwrap_or("").to_string();
 
             if site_id.is_empty() {
                 continue;
@@ -111,7 +105,11 @@ impl EtcdConfigManager {
                     backoff_secs = 5;
                 }
                 Err(e) => {
-                    log::error!("etcd watch error: {}, reconnecting in {}s...", e, backoff_secs);
+                    log::error!(
+                        "etcd watch error: {}, reconnecting in {}s...",
+                        e,
+                        backoff_secs
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
                     backoff_secs = (backoff_secs * 2).min(60);
                 }
@@ -159,10 +157,7 @@ impl EtcdConfigManager {
                         continue;
                     }
                 };
-                let site_id = key
-                    .strip_prefix(&prefix)
-                    .unwrap_or("")
-                    .to_string();
+                let site_id = key.strip_prefix(&prefix).unwrap_or("").to_string();
 
                 if site_id.is_empty() {
                     continue;
@@ -226,7 +221,11 @@ impl EtcdConfigManager {
                 new_config.build_indexes();
                 let (site_count, domain_count) = new_config.stats();
                 self.live.store(Arc::new(new_config));
-                log::info!("config updated: {} sites, {} domains", site_count, domain_count);
+                log::info!(
+                    "config updated: {} sites, {} domains",
+                    site_count,
+                    domain_count
+                );
             }
 
             // Update revision AFTER config is stored, so a crash can't leave

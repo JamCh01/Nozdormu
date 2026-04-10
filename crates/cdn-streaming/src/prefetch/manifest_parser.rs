@@ -223,14 +223,8 @@ http://origin.example.com/seg1.ts
 
         let segments = extract_dash_segments(mpd, "http://cdn.example.com/video/");
         assert_eq!(segments.len(), 5); // 30s / 6s = 5 segments
-        assert_eq!(
-            segments[0],
-            "http://cdn.example.com/video/segment_1.m4s"
-        );
-        assert_eq!(
-            segments[4],
-            "http://cdn.example.com/video/segment_5.m4s"
-        );
+        assert_eq!(segments[0], "http://cdn.example.com/video/segment_1.m4s");
+        assert_eq!(segments[4], "http://cdn.example.com/video/segment_5.m4s");
     }
 
     #[test]

@@ -93,7 +93,11 @@ mod cc_integration {
         // 3 requests allowed
         for i in 0..3 {
             let result = engine.check(ip, "/api", "/api", None, &cc, "site1").await;
-            assert!(matches!(result, CcActionResult::Allow), "request {} should be allowed", i);
+            assert!(
+                matches!(result, CcActionResult::Allow),
+                "request {} should be allowed",
+                i
+            );
         }
 
         // 4th request blocked
@@ -101,7 +105,9 @@ mod cc_integration {
         assert!(matches!(result, CcActionResult::Block { .. }));
 
         // Subsequent requests also blocked (IP is banned)
-        let result = engine.check(ip, "/other", "/other", None, &cc, "site1").await;
+        let result = engine
+            .check(ip, "/other", "/other", None, &cc, "site1")
+            .await;
         assert!(matches!(result, CcActionResult::Block { .. }));
     }
 
@@ -114,25 +120,29 @@ mod cc_integration {
             default_window: 60,
             default_block_duration: 600,
             default_action: CcAction::Block,
-            rules: vec![
-                CcRule {
-                    path: "/api/login".to_string(),
-                    rate: 2,
-                    window: 60,
-                    block_duration: 300,
-                    action: CcAction::Block,
-                    key_type: CcKeyType::IpPath,
-                },
-            ],
+            rules: vec![CcRule {
+                path: "/api/login".to_string(),
+                rate: 2,
+                window: 60,
+                block_duration: 300,
+                action: CcAction::Block,
+                key_type: CcKeyType::IpPath,
+            }],
         };
         let ip = "10.10.10.2".parse().unwrap();
 
         // /api/login has rate=2
-        let r = engine.check(ip, "/api/login", "/api/login", None, &cc, "site1").await;
+        let r = engine
+            .check(ip, "/api/login", "/api/login", None, &cc, "site1")
+            .await;
         assert!(matches!(r, CcActionResult::Allow));
-        let r = engine.check(ip, "/api/login", "/api/login", None, &cc, "site1").await;
+        let r = engine
+            .check(ip, "/api/login", "/api/login", None, &cc, "site1")
+            .await;
         assert!(matches!(r, CcActionResult::Allow));
-        let r = engine.check(ip, "/api/login", "/api/login", None, &cc, "site1").await;
+        let r = engine
+            .check(ip, "/api/login", "/api/login", None, &cc, "site1")
+            .await;
         assert!(matches!(r, CcActionResult::Block { .. }));
     }
 
@@ -166,7 +176,9 @@ mod cc_integration {
             CcActionResult::Challenge { cookie_value, .. } => {
                 // Simulate browser setting the cookie and retrying
                 let cookie = format!("__cc_challenge={}", cookie_value);
-                let r = engine.check(ip, "/", "/", Some(&cookie), &cc, "site1").await;
+                let r = engine
+                    .check(ip, "/", "/", Some(&cookie), &cc, "site1")
+                    .await;
                 assert!(matches!(r, CcActionResult::Allow));
             }
             other => panic!("expected Challenge, got {:?}", other),
@@ -195,8 +207,15 @@ mod redirect_integration {
 
         // Domain redirect has higher priority than protocol redirect
         let result = redirect::check_redirect(
-            "http", "old.example.com", "/path", "/path", None, "GET",
-            Some(&domain_redirect), &force_https, &[],
+            "http",
+            "old.example.com",
+            "/path",
+            "/path",
+            None,
+            "GET",
+            Some(&domain_redirect),
+            &force_https,
+            &[],
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::Domain));
@@ -212,8 +231,15 @@ mod redirect_integration {
         };
 
         let result = redirect::check_redirect(
-            "http", "example.com", "/path", "/path", None, "GET",
-            None, &force_https, &[],
+            "http",
+            "example.com",
+            "/path",
+            "/path",
+            None,
+            "GET",
+            None,
+            &force_https,
+            &[],
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::Protocol));
@@ -239,8 +265,15 @@ mod redirect_integration {
         }];
 
         let result = redirect::check_redirect(
-            "https", "example.com", "/old/page?q=1", "/old/page", Some("q=1"), "GET",
-            None, &force_https, &rules,
+            "https",
+            "example.com",
+            "/old/page?q=1",
+            "/old/page",
+            Some("q=1"),
+            "GET",
+            None,
+            &force_https,
+            &rules,
         );
         let r = result.unwrap();
         assert!(matches!(r.source, redirect::RedirectSource::UrlRule));
@@ -252,8 +285,15 @@ mod redirect_integration {
     fn test_no_redirect() {
         let force_https = ForceHttpsConfig::default();
         let result = redirect::check_redirect(
-            "https", "example.com", "/path", "/path", None, "GET",
-            None, &force_https, &[],
+            "https",
+            "example.com",
+            "/path",
+            "/path",
+            None,
+            "GET",
+            None,
+            &force_https,
+            &[],
         );
         assert!(result.is_none());
     }
@@ -261,7 +301,9 @@ mod redirect_integration {
 
 mod cache_integration {
     use cdn_cache::key::generate_cache_key;
-    use cdn_cache::strategy::{adjust_ttl, check_request_cacheability, check_response_cacheability};
+    use cdn_cache::strategy::{
+        adjust_ttl, check_request_cacheability, check_response_cacheability,
+    };
     use cdn_common::CacheConfig;
 
     #[test]
@@ -278,7 +320,8 @@ mod cache_integration {
         assert_eq!(key.len(), 32);
 
         // Step 3: Check response cacheability
-        let resp = check_response_cacheability(200, Some("max-age=600"), false, None, Some(1024), &config);
+        let resp =
+            check_response_cacheability(200, Some("max-age=600"), false, None, Some(1024), &config);
         assert!(resp.cacheable);
 
         // Step 4: Adjust TTL

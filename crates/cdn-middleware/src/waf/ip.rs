@@ -17,8 +17,12 @@ impl IpCidrSet {
         let mut v6 = PrefixSet::new();
         for cidr in cidrs {
             match cidr {
-                IpNet::V4(net) => { v4.insert(*net); }
-                IpNet::V6(net) => { v6.insert(*net); }
+                IpNet::V4(net) => {
+                    v4.insert(*net);
+                }
+                IpNet::V6(net) => {
+                    v6.insert(*net);
+                }
             }
         }
         Self { v4, v6 }
@@ -129,11 +133,7 @@ mod tests {
 
     #[test]
     fn test_overlapping_prefixes() {
-        let set = IpCidrSet::new(&[
-            net("10.0.0.0/8"),
-            net("10.0.0.0/16"),
-            net("10.0.0.0/24"),
-        ]);
+        let set = IpCidrSet::new(&[net("10.0.0.0/8"), net("10.0.0.0/16"), net("10.0.0.0/24")]);
         // Should return the most specific match
         assert_eq!(set.longest_match(ip("10.0.0.1")), Some(net("10.0.0.0/24")));
         assert_eq!(set.longest_match(ip("10.0.1.1")), Some(net("10.0.0.0/16")));

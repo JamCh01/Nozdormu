@@ -113,13 +113,10 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            check_protocol_redirect("http", "example.com", "/api/webhook/callback", &cfg)
-                .is_none()
+            check_protocol_redirect("http", "example.com", "/api/webhook/callback", &cfg).is_none()
         );
         // Non-excluded path should redirect
-        assert!(
-            check_protocol_redirect("http", "example.com", "/other", &cfg).is_some()
-        );
+        assert!(check_protocol_redirect("http", "example.com", "/other", &cfg).is_some());
     }
 
     #[test]
@@ -149,8 +146,7 @@ mod tests {
     #[test]
     fn test_host_with_port_stripped() {
         let cfg = config_https();
-        let result =
-            check_protocol_redirect("http", "example.com:8080", "/path", &cfg).unwrap();
+        let result = check_protocol_redirect("http", "example.com:8080", "/path", &cfg).unwrap();
         assert_eq!(result.target_url, "https://example.com/path");
     }
 

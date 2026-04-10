@@ -70,11 +70,7 @@ mod tests {
 
     #[test]
     fn test_match_rule_longest_prefix() {
-        let rules = vec![
-            rule("/", 100),
-            rule("/api", 50),
-            rule("/api/v1", 30),
-        ];
+        let rules = vec![rule("/", 100), rule("/api", 50), rule("/api/v1", 30)];
         let matched = match_rule("/api/v1/users", &rules).unwrap();
         assert_eq!(matched.path, "/api/v1");
         assert_eq!(matched.rate, 30);
@@ -101,23 +97,53 @@ mod tests {
 
     #[test]
     fn test_counter_key_ip() {
-        let key = make_counter_key("site1", "1.2.3.4".parse().unwrap(), "/api?q=1", "/api", &CcKeyType::Ip);
+        let key = make_counter_key(
+            "site1",
+            "1.2.3.4".parse().unwrap(),
+            "/api?q=1",
+            "/api",
+            &CcKeyType::Ip,
+        );
         assert_eq!(key, "nozdormu:cc:counter:site1:1.2.3.4");
     }
 
     #[test]
     fn test_counter_key_ip_url() {
-        let key = make_counter_key("site1", "1.2.3.4".parse().unwrap(), "/api?q=1", "/api", &CcKeyType::IpUrl);
+        let key = make_counter_key(
+            "site1",
+            "1.2.3.4".parse().unwrap(),
+            "/api?q=1",
+            "/api",
+            &CcKeyType::IpUrl,
+        );
         assert!(key.starts_with("nozdormu:cc:counter:site1:1.2.3.4:"));
         // Different URIs should produce different keys
-        let key2 = make_counter_key("site1", "1.2.3.4".parse().unwrap(), "/api?q=2", "/api", &CcKeyType::IpUrl);
+        let key2 = make_counter_key(
+            "site1",
+            "1.2.3.4".parse().unwrap(),
+            "/api?q=2",
+            "/api",
+            &CcKeyType::IpUrl,
+        );
         assert_ne!(key, key2);
     }
 
     #[test]
     fn test_counter_key_ip_path() {
-        let key1 = make_counter_key("site1", "1.2.3.4".parse().unwrap(), "/api?q=1", "/api", &CcKeyType::IpPath);
-        let key2 = make_counter_key("site1", "1.2.3.4".parse().unwrap(), "/api?q=2", "/api", &CcKeyType::IpPath);
+        let key1 = make_counter_key(
+            "site1",
+            "1.2.3.4".parse().unwrap(),
+            "/api?q=1",
+            "/api",
+            &CcKeyType::IpPath,
+        );
+        let key2 = make_counter_key(
+            "site1",
+            "1.2.3.4".parse().unwrap(),
+            "/api?q=2",
+            "/api",
+            &CcKeyType::IpPath,
+        );
         // Same path, different query → same key for ip_path
         assert_eq!(key1, key2);
     }

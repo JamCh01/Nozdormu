@@ -163,11 +163,7 @@ fn mime_matches(pattern: &str, mime: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn make_config(
-        max_size: u64,
-        allowed: Vec<&str>,
-        blocked: Vec<&str>,
-    ) -> BodyInspectionConfig {
+    fn make_config(max_size: u64, allowed: Vec<&str>, blocked: Vec<&str>) -> BodyInspectionConfig {
         BodyInspectionConfig {
             enabled: true,
             max_body_size: max_size,
@@ -190,7 +186,13 @@ mod tests {
     fn test_content_length_exceeds_limit() {
         let config = make_config(1_000_000, vec![], vec![]);
         let result = check_content_length(Some(2_000_000), "POST", &config);
-        assert!(matches!(result, BodyCheckResult::TooLarge { limit: 1_000_000, actual: Some(2_000_000) }));
+        assert!(matches!(
+            result,
+            BodyCheckResult::TooLarge {
+                limit: 1_000_000,
+                actual: Some(2_000_000)
+            }
+        ));
     }
 
     #[test]
@@ -279,7 +281,9 @@ mod tests {
         let unknown = [0x01, 0x02, 0x03, 0x04, 0x05];
         let config = make_config(0, vec!["image/*"], vec![]);
         let result = check_magic_bytes(&unknown, None, &config);
-        assert!(matches!(result, BodyCheckResult::ContentTypeBlocked { detected, .. } if detected == "unknown"));
+        assert!(
+            matches!(result, BodyCheckResult::ContentTypeBlocked { detected, .. } if detected == "unknown")
+        );
     }
 
     #[test]
@@ -296,7 +300,10 @@ mod tests {
         let jpeg_bytes = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
         let config = make_config(0, vec!["image/*", "application/*"], vec![]);
         let result = check_magic_bytes(&jpeg_bytes, Some("application/pdf"), &config);
-        assert!(matches!(result, BodyCheckResult::ContentTypeMismatch { .. }));
+        assert!(matches!(
+            result,
+            BodyCheckResult::ContentTypeMismatch { .. }
+        ));
     }
 
     #[test]
@@ -356,13 +363,12 @@ mod tests {
         // "text/plain; charset=utf-8" should extract "text/plain"
         let jpeg_bytes = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
         let config = make_config(0, vec!["image/*", "text/*"], vec![]);
-        let result = check_magic_bytes(
-            &jpeg_bytes,
-            Some("text/plain; charset=utf-8"),
-            &config,
-        );
+        let result = check_magic_bytes(&jpeg_bytes, Some("text/plain; charset=utf-8"), &config);
         // text vs image → mismatch
-        assert!(matches!(result, BodyCheckResult::ContentTypeMismatch { .. }));
+        assert!(matches!(
+            result,
+            BodyCheckResult::ContentTypeMismatch { .. }
+        ));
     }
 
     // ── GIF detection ──

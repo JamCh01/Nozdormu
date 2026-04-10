@@ -150,13 +150,19 @@ mod tests {
     #[test]
     fn test_grpc_whitelist_match() {
         let whitelist = vec!["my.Service".to_string()];
-        assert!(check_grpc_service_whitelist("/my.Service/Method", &whitelist));
+        assert!(check_grpc_service_whitelist(
+            "/my.Service/Method",
+            &whitelist
+        ));
     }
 
     #[test]
     fn test_grpc_whitelist_no_match() {
         let whitelist = vec!["other.Service".to_string()];
-        assert!(!check_grpc_service_whitelist("/my.Service/Method", &whitelist));
+        assert!(!check_grpc_service_whitelist(
+            "/my.Service/Method",
+            &whitelist
+        ));
     }
 
     #[test]

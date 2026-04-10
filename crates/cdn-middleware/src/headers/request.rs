@@ -1,5 +1,5 @@
-use cdn_common::{HeaderAction, HeaderRule};
 use crate::headers::variables::VariableContext;
+use cdn_common::{HeaderAction, HeaderRule};
 
 /// Apply custom request header rules to an upstream request.
 ///
@@ -11,17 +11,11 @@ use crate::headers::variables::VariableContext;
 ///
 /// Returns a list of (action, name, resolved_value) tuples to apply.
 /// The caller (proxy) applies them to the actual RequestHeader.
-pub fn apply_request_rules(
-    rules: &[HeaderRule],
-    vars: &VariableContext,
-) -> Vec<HeaderOp> {
+pub fn apply_request_rules(rules: &[HeaderRule], vars: &VariableContext) -> Vec<HeaderOp> {
     rules
         .iter()
         .map(|rule| {
-            let value = rule
-                .value
-                .as_deref()
-                .map(|v| vars.substitute(v));
+            let value = rule.value.as_deref().map(|v| vars.substitute(v));
             HeaderOp {
                 action: rule.action.clone(),
                 name: rule.name.clone(),

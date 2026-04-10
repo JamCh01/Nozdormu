@@ -1,8 +1,8 @@
 use cdn_common::{CompressionAlgorithm, OriginConfig, SiteConfig};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Lightweight request ID generator.
 /// Uses a global atomic counter combined with a process-start timestamp
@@ -23,6 +23,9 @@ fn generate_request_id() -> String {
 /// Per-request context carried through all ProxyHttp callbacks.
 /// Replaces OpenResty's ngx.ctx (which was lost after ngx.exec).
 pub struct ProxyCtx {
+    // === Timing ===
+    pub start_time: std::time::Instant,
+
     // === Set in request_filter (access phase) ===
     pub client_ip: Option<IpAddr>,
     pub site_config: Option<Arc<SiteConfig>>,
@@ -101,6 +104,7 @@ pub struct ProxyCtx {
 impl Default for ProxyCtx {
     fn default() -> Self {
         Self {
+            start_time: std::time::Instant::now(),
             client_ip: None,
             site_config: None,
             site_id: String::new(),

@@ -1,7 +1,7 @@
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use dashmap::DashMap;
 
 /// Certificate data stored per domain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +17,9 @@ pub struct CertData {
 impl CertData {
     /// Parse the certificate to extract expiry date.
     pub fn parse_expiry(cert_pem: &str) -> Option<i64> {
-        let pem = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes()).ok()?.1;
+        let pem = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+            .ok()?
+            .1;
         let cert = pem.parse_x509().ok()?;
         Some(cert.validity().not_after.timestamp())
     }
@@ -175,7 +177,11 @@ impl CertStorage {
             std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
         }
 
-        log::info!("[CertStorage] saved cert for {} to {}", domain, dir.display());
+        log::info!(
+            "[CertStorage] saved cert for {} to {}",
+            domain,
+            dir.display()
+        );
         Ok(())
     }
 
@@ -277,7 +283,9 @@ mod tests {
             provider: Some("test".to_string()),
             domains: vec!["example.com".to_string()],
         };
-        storage.cache.insert("example.com".to_string(), cert.clone());
+        storage
+            .cache
+            .insert("example.com".to_string(), cert.clone());
         let loaded = storage.get("example.com").unwrap();
         assert_eq!(loaded.cert_pem, "CERT");
     }

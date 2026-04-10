@@ -7,20 +7,20 @@
 - **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制
 - **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式，请求体检查（POST Body 大小限制 + 基于魔数字节的内容类型校验，使用 `infer` 库检测 200+ 文件类型）
 - **CC 防护（频率限制）** -- 本地+Redis 混合计数器，JS 挑战（HMAC-SHA256），按路径规则最长前缀匹配
-- **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除）
-- **图片优化** -- 实时裁剪/缩放（5 种 fit 模式），格式转换（JPEG/PNG/WebP/AVIF），质量调整，通过 `Accept` 头自动协商格式，DPR 自适应；纯 Rust 实现（`image` + `fast_image_resize`）
+- **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除），直接哈希 Key 生成（零中间分配），批量清除并发 Redis 管道
+- **图片优化** -- 实时裁剪/缩放（5 种 fit 模式），格式转换（JPEG/PNG/WebP/AVIF），质量调整，通过 `Accept` 头自动协商格式，DPR 自适应（DPR 感知尺寸限制）；纯 Rust 实现（`image` + `fast_image_resize`）
 - **Range 请求** -- 客户端断点续传，`Accept-Ranges: bytes` 通告，`If-Range` 条件请求，Range 透传回源，OSS Range GET 内存高效的缓存分片服务；按站点启用/禁用
 - **视频流优化** -- 三大功能：
   - **边缘鉴权（URL 签名）** -- Type A/B/C 三种 URL 签名模式（HMAC-SHA256），防盗链，可配置过期时间
   - **动态转封装** -- 源站存储 MP4，边缘实时转封装为 HLS（fMP4 分片 + m3u8 播放列表），支持 `?format=hls` 触发
-  - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，提升命中率
+  - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，原子去重，响应体大小限制（256MB），提升命中率
 - **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
 - **负载均衡** -- 加权轮询、IP 哈希、随机；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
 - **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），自动续期，分布式锁
 - **重定向** -- 三层引擎：域名重定向、协议强制（HTTP/HTTPS）、URL 规则（精确/前缀/正则/域名）
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
-- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志，请求 ID 追踪
-- **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过
+- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
+- **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
 - **管理 API** -- 配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务）；Bearer Token 认证，常量时间比较
 
 ## 架构
@@ -310,7 +310,7 @@ curl -X POST http://localhost:8080/reload
 ## 开发
 
 ```bash
-# 运行单元/集成测试（432 个测试）
+# 运行单元/集成测试（431 个测试）
 cargo test
 
 # 代码检查

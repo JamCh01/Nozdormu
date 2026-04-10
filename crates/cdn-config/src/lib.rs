@@ -1,18 +1,18 @@
-pub mod types;
-pub mod node_config;
+pub mod etcd_watcher;
 pub mod global_config;
 pub mod live_config;
-pub mod etcd_watcher;
+pub mod node_config;
 pub mod schema;
+pub mod types;
 
-pub use types::*;
-pub use node_config::NodeConfig;
-pub use node_config::BootstrapConfig;
-pub use node_config::EabCredentials;
+pub use etcd_watcher::load_global_config;
+pub use etcd_watcher::EtcdConfigManager;
 pub use global_config::GlobalConfig;
 pub use live_config::LiveConfig;
-pub use etcd_watcher::EtcdConfigManager;
-pub use etcd_watcher::load_global_config;
+pub use node_config::BootstrapConfig;
+pub use node_config::EabCredentials;
+pub use node_config::NodeConfig;
+pub use types::*;
 
 use cdn_common::CdnResult;
 use serde::Deserialize;

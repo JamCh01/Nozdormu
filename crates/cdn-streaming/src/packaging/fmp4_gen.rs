@@ -3,9 +3,7 @@
 //! Generates ISO BMFF init segments (ftyp + moov with trex) and
 //! media segments (moof + mdat) from parsed MP4 metadata.
 
-use super::mp4_parse::{
-    self, Mp4Metadata, TrackInfo, TrackType,
-};
+use super::mp4_parse::{self, Mp4Metadata, TrackInfo, TrackType};
 use super::PackagingError;
 
 // ── Box writing helpers ──
@@ -105,10 +103,8 @@ fn build_mvhd(timescale: u32) -> Vec<u8> {
     write_u32_be(&mut content, 0x00010000); // rate = 1.0
     write_u16_be(&mut content, 0x0100); // volume = 1.0
     content.extend_from_slice(&[0u8; 10]); // reserved
-    // Matrix (identity, 9 x u32)
-    let identity_matrix: [u32; 9] = [
-        0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-    ];
+                                           // Matrix (identity, 9 x u32)
+    let identity_matrix: [u32; 9] = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
     for val in &identity_matrix {
         write_u32_be(&mut content, *val);
     }
@@ -143,7 +139,7 @@ fn build_tkhd(track: &TrackInfo) -> Vec<u8> {
     content.extend_from_slice(&[0u8; 8]); // reserved
     write_u16_be(&mut content, 0); // layer
     write_u16_be(&mut content, 0); // alternate_group
-    // volume: 0x0100 for audio, 0 for video
+                                   // volume: 0x0100 for audio, 0 for video
     let volume: u16 = if track.track_type == TrackType::Audio {
         0x0100
     } else {
@@ -151,10 +147,8 @@ fn build_tkhd(track: &TrackInfo) -> Vec<u8> {
     };
     write_u16_be(&mut content, volume);
     write_u16_be(&mut content, 0); // reserved
-    // Matrix (identity)
-    let identity_matrix: [u32; 9] = [
-        0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-    ];
+                                   // Matrix (identity)
+    let identity_matrix: [u32; 9] = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
     for val in &identity_matrix {
         write_u32_be(&mut content, *val);
     }
@@ -239,7 +233,7 @@ fn build_init_minf(track: &TrackInfo) -> Vec<u8> {
     let mut dref_content = Vec::new();
     write_u32_be(&mut dref_content, 0); // version=0, flags=0
     write_u32_be(&mut dref_content, 1); // entry_count=1
-    // url entry (self-contained)
+                                        // url entry (self-contained)
     let mut url_content = Vec::new();
     write_u32_be(&mut url_content, 0x00000001); // version=0, flags=1 (self-contained)
     let url_box = make_box(b"url ", &url_content);
@@ -363,13 +357,7 @@ pub fn generate_media_segment(
             moof_size + 8 + track_data_offset, // offset from moof start to this track's data in mdat
         )?;
         // Calculate this track's data size for next track's offset
-        let (_, track_mdat) = build_traf(
-            mp4_data,
-            track,
-            segment_index,
-            segment_duration,
-            0,
-        )?;
+        let (_, track_mdat) = build_traf(mp4_data, track, segment_index, segment_duration, 0)?;
         track_data_offset += track_mdat.len() as u32;
         final_moof_content.extend_from_slice(&traf);
     }
@@ -403,23 +391,14 @@ fn segment_sample_range(
     let start_time = segment_index as f64 * segment_duration * track.timescale as f64;
     let end_time = (segment_index + 1) as f64 * segment_duration * track.timescale as f64;
 
-    let mut start_sample = mp4_parse::dts_to_sample(
-        &track.sample_table.stts,
-        start_time as u64,
-    );
+    let mut start_sample = mp4_parse::dts_to_sample(&track.sample_table.stts, start_time as u64);
 
     // Align to keyframe for video tracks
     if track.track_type == TrackType::Video {
-        start_sample = mp4_parse::nearest_sync_sample(
-            &track.sample_table.stss,
-            start_sample,
-        );
+        start_sample = mp4_parse::nearest_sync_sample(&track.sample_table.stss, start_sample);
     }
 
-    let mut end_sample = mp4_parse::dts_to_sample(
-        &track.sample_table.stts,
-        end_time as u64,
-    );
+    let mut end_sample = mp4_parse::dts_to_sample(&track.sample_table.stts, end_time as u64);
 
     // For the last segment, include all remaining samples
     if end_sample >= total {
@@ -468,8 +447,7 @@ fn build_traf_with_offset(
     segment_duration: f64,
     data_offset: u32,
 ) -> Result<(Vec<u8>, Vec<u8>), PackagingError> {
-    let (start_sample, end_sample) =
-        segment_sample_range(track, segment_index, segment_duration);
+    let (start_sample, end_sample) = segment_sample_range(track, segment_index, segment_duration);
     let sample_count = end_sample.saturating_sub(start_sample);
 
     if sample_count == 0 {
@@ -487,10 +465,7 @@ fn build_traf_with_offset(
     traf_content.extend_from_slice(&tfhd);
 
     // tfdt (track fragment decode time)
-    let base_dts = mp4_parse::sample_to_dts(
-        &track.sample_table.stts,
-        start_sample,
-    );
+    let base_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, start_sample);
     let tfdt = build_tfdt(base_dts);
     traf_content.extend_from_slice(&tfdt);
 
@@ -525,12 +500,33 @@ fn build_traf_with_offset(
 
         sample_entries.push((duration, size, flags, cts_offset));
 
-        // Copy sample data from original MP4
+        // Copy sample data from original MP4.
+        // If offset is missing or out of bounds, zero the sample size in trun
+        // to keep trun/mdat byte counts consistent (ISO BMFF requirement).
         if let Some((offset, sz)) = mp4_parse::get_sample_offset(&track.sample_table, i) {
             let start = offset as usize;
             let end = start + sz as usize;
             if end <= mp4_data.len() {
                 mdat_payload.extend_from_slice(&mp4_data[start..end]);
+            } else {
+                log::warn!(
+                    "[fMP4] sample {} offset {}-{} exceeds mp4 data len {}, zeroing size",
+                    i,
+                    start,
+                    end,
+                    mp4_data.len()
+                );
+                if let Some(entry) = sample_entries.last_mut() {
+                    entry.1 = 0;
+                }
+            }
+        } else {
+            log::warn!(
+                "[fMP4] sample {} has no offset in sample table, zeroing size",
+                i
+            );
+            if let Some(entry) = sample_entries.last_mut() {
+                entry.1 = 0;
             }
         }
     }
@@ -612,10 +608,10 @@ fn get_cts_offset(ctts: &Option<Vec<mp4_parse::CttsEntry>>, sample_index: u32) -
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::mp4_parse::{
         Mp4Metadata, SampleTable, StscEntry, SttsEntry, TrackInfo, TrackType,
     };
+    use super::*;
 
     fn make_test_metadata() -> Mp4Metadata {
         Mp4Metadata {
@@ -713,8 +709,14 @@ mod tests {
     #[test]
     fn test_get_sample_duration() {
         let stts = vec![
-            SttsEntry { sample_count: 5, sample_delta: 1000 },
-            SttsEntry { sample_count: 5, sample_delta: 2000 },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 1000,
+            },
+            SttsEntry {
+                sample_count: 5,
+                sample_delta: 2000,
+            },
         ];
         assert_eq!(get_sample_duration(&stts, 0), 1000);
         assert_eq!(get_sample_duration(&stts, 4), 1000);
@@ -734,7 +736,10 @@ mod tests {
         let trex = build_trex(1);
         assert_eq!(&trex[4..8], b"trex");
         // track_id at offset 12
-        assert_eq!(u32::from_be_bytes([trex[12], trex[13], trex[14], trex[15]]), 1);
+        assert_eq!(
+            u32::from_be_bytes([trex[12], trex[13], trex[14], trex[15]]),
+            1
+        );
     }
 
     #[test]

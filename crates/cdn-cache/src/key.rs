@@ -14,33 +14,46 @@ pub fn generate_cache_key(
     sort_query_string: bool,
     vary_headers: &[(String, String)], // (header_name, header_value)
 ) -> String {
-    let sorted_args = match query_string {
+    let mut hasher = Md5::new();
+
+    // Hash: site_id:host:path:
+    hasher.update(site_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(host.as_bytes());
+    hasher.update(b":");
+    hasher.update(path.as_bytes());
+    hasher.update(b":");
+
+    // Hash: sorted_args (or raw query string)
+    match query_string {
         Some(qs) if !qs.is_empty() => {
             if sort_query_string {
-                sort_query(qs)
+                let sorted = sort_query(qs);
+                hasher.update(sorted.as_bytes());
             } else {
-                qs.to_string()
+                hasher.update(qs.as_bytes());
             }
         }
-        _ => String::new(),
-    };
+        _ => {}
+    }
 
-    let vary_part = if vary_headers.is_empty() {
-        String::new()
-    } else {
-        vary_headers
-            .iter()
-            .map(|(k, v)| format!("{}={}", k.to_lowercase(), v))
-            .collect::<Vec<_>>()
-            .join("&")
-    };
+    // Hash: :vary_part
+    hasher.update(b":");
+    if !vary_headers.is_empty() {
+        for (i, (k, v)) in vary_headers.iter().enumerate() {
+            if i > 0 {
+                hasher.update(b"&");
+            }
+            // Lowercase header name for case-insensitive matching
+            for &b in k.as_bytes() {
+                hasher.update(&[b.to_ascii_lowercase()]);
+            }
+            hasher.update(b"=");
+            hasher.update(v.as_bytes());
+        }
+    }
 
-    let raw = format!("{}:{}:{}:{}:{}", site_id, host, path, sorted_args, vary_part);
-
-    let mut hasher = Md5::new();
-    hasher.update(raw.as_bytes());
-    let result = hasher.finalize();
-    cdn_common::hex_encode(&result)
+    cdn_common::hex_encode(&hasher.finalize())
 }
 
 /// Generate the OSS object path from a cache key.
@@ -112,7 +125,11 @@ mod tests {
     fn test_vary_headers_affect_key() {
         let k1 = generate_cache_key("s", "h", "/p", None, false, &[]);
         let k2 = generate_cache_key(
-            "s", "h", "/p", None, false,
+            "s",
+            "h",
+            "/p",
+            None,
+            false,
             &[("Accept-Language".to_string(), "en".to_string())],
         );
         assert_ne!(k1, k2);
@@ -121,11 +138,19 @@ mod tests {
     #[test]
     fn test_vary_header_name_case_insensitive() {
         let k1 = generate_cache_key(
-            "s", "h", "/p", None, false,
+            "s",
+            "h",
+            "/p",
+            None,
+            false,
             &[("Accept-Language".to_string(), "en".to_string())],
         );
         let k2 = generate_cache_key(
-            "s", "h", "/p", None, false,
+            "s",
+            "h",
+            "/p",
+            None,
+            false,
             &[("accept-language".to_string(), "en".to_string())],
         );
         assert_eq!(k1, k2); // Same key regardless of header name case

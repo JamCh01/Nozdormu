@@ -55,16 +55,10 @@ impl DynamicBalancer {
                 .filter(|o| self.health.is_healthy(&site.site_id, &o.id))
                 .collect();
             if backups.is_empty() {
-                log::error!(
-                    "[Balancer] no healthy origins for site={}",
-                    site.site_id
-                );
+                log::error!("[Balancer] no healthy origins for site={}", site.site_id);
                 return Err(pingora::Error::new(ErrorType::ConnectProxyFailure));
             }
-            log::warn!(
-                "[Balancer] using backup origins for site={}",
-                site.site_id
-            );
+            log::warn!("[Balancer] using backup origins for site={}", site.site_id);
             backups
         } else {
             primaries
@@ -88,7 +82,8 @@ impl DynamicBalancer {
             .ok_or_else(|| {
                 log::error!(
                     "[Balancer] DNS resolution failed: {}:{}",
-                    selected.host, selected.port
+                    selected.host,
+                    selected.port
                 );
                 pingora::Error::new(ErrorType::ConnectProxyFailure)
             })?;
@@ -142,11 +137,7 @@ impl DynamicBalancer {
     }
 
     /// IP hash selection using DJB2 hash.
-    fn select_ip_hash<'a>(
-        &self,
-        candidates: &[&'a OriginConfig],
-        ip: IpAddr,
-    ) -> &'a OriginConfig {
+    fn select_ip_hash<'a>(&self, candidates: &[&'a OriginConfig], ip: IpAddr) -> &'a OriginConfig {
         let hash = djb2_hash(&ip.to_string());
         let total_weight: u32 = candidates.iter().map(|o| o.weight).sum();
         if total_weight == 0 {

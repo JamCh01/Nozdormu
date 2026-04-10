@@ -102,9 +102,7 @@ impl NodeConfig {
             cache_oss: CacheOssConfig::from_etcd_with_env_override(global.cache.as_ref()),
             ssl: SslAcmeConfig::from_etcd_with_env_override(global.ssl.as_ref()),
             log: LogConfig::from_etcd_with_env_override(global.logging.as_ref()),
-            compression: compression_from_etcd_with_env_override(
-                global.compression.as_ref(),
-            ),
+            compression: compression_from_etcd_with_env_override(global.compression.as_ref()),
             image_optimization: image_optimization_from_etcd_with_env_override(
                 global.image_optimization.as_ref(),
             ),
@@ -125,17 +123,13 @@ impl NodeConfig {
             etcd: bootstrap.etcd.clone(),
             paths: bootstrap.paths.clone(),
             redis: RedisConfig::from_etcd_with_env_override(global.redis.as_ref()),
-            security: SecurityConfig::from_etcd_with_env_override(
-                global.security.as_ref(),
-            ),
+            security: SecurityConfig::from_etcd_with_env_override(global.security.as_ref()),
             balancer: BalancerConfig::from_etcd_with_env_override(global.balancer.as_ref()),
             proxy: ProxyTimeoutConfig::from_etcd_with_env_override(global.proxy.as_ref()),
             cache_oss: CacheOssConfig::from_etcd_with_env_override(global.cache.as_ref()),
             ssl: SslAcmeConfig::from_etcd_with_env_override(global.ssl.as_ref()),
             log: LogConfig::from_etcd_with_env_override(global.logging.as_ref()),
-            compression: compression_from_etcd_with_env_override(
-                global.compression.as_ref(),
-            ),
+            compression: compression_from_etcd_with_env_override(global.compression.as_ref()),
             image_optimization: image_optimization_from_etcd_with_env_override(
                 global.image_optimization.as_ref(),
             ),
@@ -635,7 +629,10 @@ impl std::fmt::Debug for SecurityConfig {
             .field("cc_default_block_duration", &self.cc_default_block_duration)
             .field("cc_challenge_secret", &"[REDACTED]")
             .field("trusted_proxies", &self.trusted_proxies)
-            .field("admin_token", &self.admin_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "admin_token",
+                &self.admin_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -953,10 +950,22 @@ pub struct EabCredentials {
 impl std::fmt::Debug for EabCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EabCredentials")
-            .field("zerossl_kid", &self.zerossl_kid.as_ref().map(|_| "[REDACTED]"))
-            .field("zerossl_hmac_key", &self.zerossl_hmac_key.as_ref().map(|_| "[REDACTED]"))
-            .field("google_kid", &self.google_kid.as_ref().map(|_| "[REDACTED]"))
-            .field("google_hmac_key", &self.google_hmac_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "zerossl_kid",
+                &self.zerossl_kid.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "zerossl_hmac_key",
+                &self.zerossl_hmac_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "google_kid",
+                &self.google_kid.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "google_hmac_key",
+                &self.google_hmac_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }

@@ -183,7 +183,10 @@ impl BackgroundService for ActiveHealthCheckService {
             // Remove tasks for origins no longer in desired set
             running.retain(|key, handle| {
                 if !desired.contains_key(key) {
-                    log::info!("[HealthProbe] stopping probe for {}", key.replace('\0', "/"));
+                    log::info!(
+                        "[HealthProbe] stopping probe for {}",
+                        key.replace('\0', "/")
+                    );
                     handle.abort();
                     false
                 } else {
@@ -224,11 +227,7 @@ impl BackgroundService for ActiveHealthCheckService {
 
 // ── Per-origin probe loop ──
 
-async fn probe_loop(
-    target: ProbeTarget,
-    health: Arc<HealthChecker>,
-    dns: Arc<DnsResolver>,
-) {
+async fn probe_loop(target: ProbeTarget, health: Arc<HealthChecker>, dns: Arc<DnsResolver>) {
     // Initial jitter: random delay in [0, interval) to spread probes
     let jitter_ms = fastrand::u64(..target.interval.as_millis() as u64);
     tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
@@ -251,9 +250,7 @@ async fn probe_loop(
 
         let start = Instant::now();
         let result = match target.check_type {
-            HealthCheckType::Http => {
-                http_probe(&target, &dns, http_client.as_ref().unwrap()).await
-            }
+            HealthCheckType::Http => http_probe(&target, &dns, http_client.as_ref().unwrap()).await,
             HealthCheckType::Tcp => tcp_probe(&target, &dns).await,
         };
         let elapsed = start.elapsed();
@@ -278,7 +275,9 @@ async fn probe_loop(
         if let Err(ref reason) = result {
             log::debug!(
                 "[HealthProbe] probe failed: site={} origin={} reason={}",
-                target.site_id, target.origin_id, reason
+                target.site_id,
+                target.origin_id,
+                reason
             );
         }
     }
@@ -299,28 +298,28 @@ fn update_probe_state(
         state.consecutive_failures = 0;
         state.consecutive_successes += 1;
 
-        if !state.currently_healthy
-            && state.consecutive_successes >= target.healthy_threshold
-        {
+        if !state.currently_healthy && state.consecutive_successes >= target.healthy_threshold {
             state.currently_healthy = true;
             health.set_status(&target.site_id, &target.origin_id, true);
             log::info!(
                 "[HealthProbe] origin recovered: site={} origin={} after {} successes",
-                target.site_id, target.origin_id, state.consecutive_successes
+                target.site_id,
+                target.origin_id,
+                state.consecutive_successes
             );
         }
     } else {
         state.consecutive_successes = 0;
         state.consecutive_failures += 1;
 
-        if state.currently_healthy
-            && state.consecutive_failures >= target.unhealthy_threshold
-        {
+        if state.currently_healthy && state.consecutive_failures >= target.unhealthy_threshold {
             state.currently_healthy = false;
             health.set_status(&target.site_id, &target.origin_id, false);
             log::warn!(
                 "[HealthProbe] origin marked unhealthy: site={} origin={} after {} failures",
-                target.site_id, target.origin_id, state.consecutive_failures
+                target.site_id,
+                target.origin_id,
+                state.consecutive_failures
             );
         }
     }
@@ -343,7 +342,9 @@ fn build_http_client(target: &ProbeTarget) -> reqwest::Client {
     builder.build().unwrap_or_else(|e| {
         log::error!(
             "[HealthProbe] failed to build HTTP client for {}:{}: {}",
-            target.host, target.port, e
+            target.host,
+            target.port,
+            e
         );
         reqwest::Client::new()
     })
@@ -361,10 +362,7 @@ async fn http_probe(
         OriginProtocol::Http => "http",
     };
 
-    let host_header = target
-        .host_header
-        .as_deref()
-        .unwrap_or(&target.host);
+    let host_header = target.host_header.as_deref().unwrap_or(&target.host);
 
     // For HTTPS, use the SNI hostname in the URL so TLS handshake sends correct SNI.
     // For HTTP, connect directly to the resolved IP.
@@ -391,7 +389,10 @@ async fn http_probe(
         req = client.get(&url).header("Host", host_header);
     }
 
-    let resp = req.send().await.map_err(|e| format!("HTTP request failed: {}", e))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
 
     let status = resp.status().as_u16();
     if is_expected_status(status, &target.expected_codes) {
@@ -410,18 +411,10 @@ fn is_expected_status(status: u16, expected_codes: &Option<Vec<u16>>) -> bool {
 
 // ── TCP probe ──
 
-async fn tcp_probe(
-    target: &ProbeTarget,
-    dns: &DnsResolver,
-) -> Result<(), String> {
+async fn tcp_probe(target: &ProbeTarget, dns: &DnsResolver) -> Result<(), String> {
     let addr = resolve_target(target, dns).await?;
 
-    match tokio::time::timeout(
-        target.timeout,
-        tokio::net::TcpStream::connect(addr),
-    )
-    .await
-    {
+    match tokio::time::timeout(target.timeout, tokio::net::TcpStream::connect(addr)).await {
         Ok(Ok(_stream)) => Ok(()),
         Ok(Err(e)) => Err(format!("TCP connect failed: {}", e)),
         Err(_) => Err("TCP connect timeout".to_string()),
@@ -430,10 +423,7 @@ async fn tcp_probe(
 
 // ── DNS resolution helper ──
 
-async fn resolve_target(
-    target: &ProbeTarget,
-    dns: &DnsResolver,
-) -> Result<SocketAddr, String> {
+async fn resolve_target(target: &ProbeTarget, dns: &DnsResolver) -> Result<SocketAddr, String> {
     dns.resolve_to_socket(&target.host, target.port)
         .await
         .ok_or_else(|| format!("DNS resolution failed for {}:{}", target.host, target.port))
@@ -477,10 +467,7 @@ mod tests {
     #[test]
     fn test_probe_key() {
         assert_eq!(probe_key("site1", "origin1"), "site1\0origin1");
-        assert_ne!(
-            probe_key("site1", "origin1"),
-            probe_key("site1", "origin2")
-        );
+        assert_ne!(probe_key("site1", "origin1"), probe_key("site1", "origin2"));
     }
 
     #[test]

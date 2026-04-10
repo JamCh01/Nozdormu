@@ -88,28 +88,22 @@ impl PrefetchWorker {
                 .or_insert_with(|| Arc::new(Semaphore::new(concurrency)))
                 .clone();
 
-            let urls_to_fetch: Vec<String> = segment_urls
-                .into_iter()
-                .take(prefetch_count)
-                .collect();
+            let urls_to_fetch: Vec<String> =
+                segment_urls.into_iter().take(prefetch_count).collect();
 
             for url in urls_to_fetch {
                 // Generate cache key for this segment
                 let (seg_host, seg_path) = parse_url_components(&url, &host);
-                let cache_key = generate_cache_key(
-                    &site_id,
-                    &seg_host,
-                    &seg_path,
-                    None,
-                    false,
-                    &[],
-                );
+                let cache_key =
+                    generate_cache_key(&site_id, &seg_host, &seg_path, None, false, &[]);
 
-                // Deduplication: skip if already in-flight
-                if worker.in_flight.contains_key(&cache_key) {
-                    continue;
+                // Atomic deduplication: skip if already in-flight
+                match worker.in_flight.entry(cache_key.clone()) {
+                    dashmap::mapref::entry::Entry::Occupied(_) => continue,
+                    dashmap::mapref::entry::Entry::Vacant(e) => {
+                        e.insert(());
+                    }
                 }
-                worker.in_flight.insert(cache_key.clone(), ());
 
                 let w = Arc::clone(&worker);
                 let sid = site_id.clone();
@@ -143,26 +137,19 @@ impl PrefetchWorker {
                     match w.fetch_segment(&origin_url, &host_clone).await {
                         Ok((status, headers, body)) => {
                             let ttl = site_cfg.cache.default_ttl;
-                            let meta = storage::build_cache_meta(
-                                status,
-                                &headers,
-                                ttl,
-                                body.len() as u64,
-                            );
-                            if let Err(e) =
-                                w.cache_storage.put(&sid, &cache_key, &meta, body).await
+                            let meta =
+                                storage::build_cache_meta(status, &headers, ttl, body.len() as u64);
+                            if let Err(e) = w.cache_storage.put(&sid, &cache_key, &meta, body).await
                             {
-                                log::warn!(
-                                    "[Prefetch] cache put failed for {}: {}",
-                                    cache_key, e
-                                );
+                                log::warn!("[Prefetch] cache put failed for {}: {}", cache_key, e);
                                 PREFETCH_TOTAL
                                     .with_label_values(&[sid.as_str(), "error"])
                                     .inc();
                             } else {
                                 log::debug!(
                                     "[Prefetch] cached segment {} for site {}",
-                                    cache_key, sid
+                                    cache_key,
+                                    sid
                                 );
                                 PREFETCH_TOTAL
                                     .with_label_values(&[sid.as_str(), "success"])
@@ -187,12 +174,16 @@ impl PrefetchWorker {
         });
     }
 
+    /// Maximum response body size for prefetched segments (256 MB).
+    const MAX_PREFETCH_BODY: usize = 256 * 1024 * 1024;
+
     /// Fetch a segment from origin via HTTP.
     async fn fetch_segment(
         &self,
         url: &str,
         host: &str,
-    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), reqwest::Error> {
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), Box<dyn std::error::Error + Send + Sync>>
+    {
         let resp = self
             .http_client
             .get(url)
@@ -209,13 +200,25 @@ impl PrefetchWorker {
             .collect();
         let body = resp.bytes().await?.to_vec();
 
+        if body.len() > Self::MAX_PREFETCH_BODY {
+            return Err(format!(
+                "prefetch body too large: {} bytes (max {})",
+                body.len(),
+                Self::MAX_PREFETCH_BODY
+            )
+            .into());
+        }
+
         Ok((status, headers, body))
     }
 }
 
 /// Parse URL into (host, path) components.
 fn parse_url_components(url: &str, default_host: &str) -> (String, String) {
-    if let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) {
+    if let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    {
         if let Some(slash_pos) = rest.find('/') {
             let host = &rest[..slash_pos];
             let path = &rest[slash_pos..];
@@ -250,7 +253,10 @@ fn build_origin_url(origin: &OriginConfig, segment_url: &str, _host: &str) -> St
         cdn_common::OriginProtocol::Https => "https",
         cdn_common::OriginProtocol::Http => "http",
     };
-    format!("{}://{}:{}{}", scheme, origin.host, origin.port, segment_url)
+    format!(
+        "{}://{}:{}{}",
+        scheme, origin.host, origin.port, segment_url
+    )
 }
 
 #[cfg(test)]
@@ -259,10 +265,8 @@ mod tests {
 
     #[test]
     fn test_parse_url_components_absolute() {
-        let (host, path) = parse_url_components(
-            "http://cdn.example.com/video/seg0.ts",
-            "default.com",
-        );
+        let (host, path) =
+            parse_url_components("http://cdn.example.com/video/seg0.ts", "default.com");
         assert_eq!(host, "cdn.example.com");
         assert_eq!(path, "/video/seg0.ts");
     }

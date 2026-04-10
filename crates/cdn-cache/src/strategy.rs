@@ -44,11 +44,19 @@ pub struct CacheDecision {
 
 impl CacheDecision {
     fn skip(reason: &'static str) -> Self {
-        Self { cacheable: false, ttl: 0, reason }
+        Self {
+            cacheable: false,
+            ttl: 0,
+            reason,
+        }
     }
 
     fn cache(ttl: u64, reason: &'static str) -> Self {
-        Self { cacheable: true, ttl, reason }
+        Self {
+            cacheable: true,
+            ttl,
+            reason,
+        }
     }
 }
 
@@ -116,7 +124,8 @@ pub fn check_response_cacheability(
     config: &CacheConfig,
 ) -> CacheDecision {
     // Status code check
-    const CACHEABLE_STATUSES: &[u16] = &[200, 203, 204, 206, 300, 301, 302, 304, 307, 308, 404, 410];
+    const CACHEABLE_STATUSES: &[u16] =
+        &[200, 203, 204, 206, 300, 301, 302, 304, 307, 308, 404, 410];
     if !CACHEABLE_STATUSES.contains(&status) {
         return CacheDecision::skip("status not cacheable");
     }
@@ -124,7 +133,10 @@ pub fn check_response_cacheability(
     // Response Cache-Control
     if let Some(cc) = cache_control {
         let cc_lower = cc.to_ascii_lowercase();
-        if cc_lower.contains("private") || cc_lower.contains("no-cache") || cc_lower.contains("no-store") {
+        if cc_lower.contains("private")
+            || cc_lower.contains("no-cache")
+            || cc_lower.contains("no-store")
+        {
             return CacheDecision::skip("response cache-control");
         }
     }
@@ -155,11 +167,7 @@ pub fn check_response_cacheability(
 ///
 /// Priority: s-maxage > max-age > Expires > config TTL
 /// Takes the minimum of response-derived TTL and config TTL.
-pub fn adjust_ttl(
-    config_ttl: u64,
-    cache_control: Option<&str>,
-    expires: Option<&str>,
-) -> u64 {
+pub fn adjust_ttl(config_ttl: u64, cache_control: Option<&str>, expires: Option<&str>) -> u64 {
     if let Some(cc) = cache_control {
         let cc_lower = cc.to_ascii_lowercase();
         // s-maxage (highest priority)
@@ -378,7 +386,8 @@ mod tests {
 
     #[test]
     fn test_private_not_cacheable() {
-        let d = check_response_cacheability(200, Some("private"), false, None, None, &default_config());
+        let d =
+            check_response_cacheability(200, Some("private"), false, None, None, &default_config());
         assert!(!d.cacheable);
     }
 
@@ -404,7 +413,14 @@ mod tests {
 
     #[test]
     fn test_too_large_not_cacheable() {
-        let d = check_response_cacheability(200, None, false, None, Some(200_000_000), &default_config());
+        let d = check_response_cacheability(
+            200,
+            None,
+            false,
+            None,
+            Some(200_000_000),
+            &default_config(),
+        );
         assert!(!d.cacheable);
     }
 

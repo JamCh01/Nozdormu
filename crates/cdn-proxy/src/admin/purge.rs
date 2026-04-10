@@ -76,11 +76,9 @@ impl PurgeTaskTracker {
         let evict_before = now - 3600;
 
         // Evict old completed/failed tasks
-        self.tasks.retain(|_, v| {
-            match v.status {
-                PurgeTaskState::Running => true,
-                _ => v.completed_at.unwrap_or(v.started_at) > evict_before,
-            }
+        self.tasks.retain(|_, v| match v.status {
+            PurgeTaskState::Running => true,
+            _ => v.completed_at.unwrap_or(v.started_at) > evict_before,
         });
 
         self.tasks.insert(status.task_id.clone(), status);
@@ -91,7 +89,10 @@ impl PurgeTaskTracker {
     }
 
     pub fn list(&self) -> Vec<PurgeTaskStatus> {
-        self.tasks.iter().map(|entry| entry.value().clone()).collect()
+        self.tasks
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     pub fn update_completed(&self, task_id: &str, keys_deleted: u64) {
@@ -159,7 +160,12 @@ pub async fn purge_url(
     let start = Instant::now();
 
     let cache_key = generate_cache_key(
-        site_id, host, path, query_string, sort_query_string, vary_headers,
+        site_id,
+        host,
+        path,
+        query_string,
+        sort_query_string,
+        vary_headers,
     );
 
     let result = cache_storage.delete(site_id, &cache_key).await;
@@ -195,7 +201,11 @@ pub async fn purge_site_background(
 ) {
     let start = Instant::now();
 
-    log::info!("[Purge] starting site purge: site={} task={}", site_id, task_id);
+    log::info!(
+        "[Purge] starting site purge: site={} task={}",
+        site_id,
+        task_id
+    );
 
     let result = purge_site_inner(&redis_pool, &cache_storage, &site_id).await;
     let elapsed = start.elapsed().as_secs_f64();
@@ -204,7 +214,9 @@ pub async fn purge_site_background(
         Ok(keys_deleted) => {
             log::info!(
                 "[Purge] site purge completed: site={} keys={} duration={:.2}s",
-                site_id, keys_deleted, elapsed
+                site_id,
+                keys_deleted,
+                elapsed
             );
             task_tracker.update_completed(&task_id, keys_deleted);
 
@@ -218,7 +230,9 @@ pub async fn purge_site_background(
         Err(ref e) => {
             log::error!(
                 "[Purge] site purge failed: site={} error={} duration={:.2}s",
-                site_id, e, elapsed
+                site_id,
+                e,
+                elapsed
             );
             task_tracker.update_failed(&task_id, e.clone());
 
@@ -246,7 +260,8 @@ async fn purge_site_inner(
         Ok(redis_keys) if !redis_keys.is_empty() => {
             log::info!(
                 "[Purge] Redis SCAN found {} keys for site {}",
-                redis_keys.len(), site_id
+                redis_keys.len(),
+                site_id
             );
 
             // Extract cache_key from Redis key (strip prefix)
@@ -260,7 +275,10 @@ async fn purge_site_inner(
         }
         Ok(_) => {
             // No keys found via SCAN — try OSS-only fallback
-            log::info!("[Purge] no Redis keys found for site {}, trying OSS listing", site_id);
+            log::info!(
+                "[Purge] no Redis keys found for site {}, trying OSS listing",
+                site_id
+            );
             let deleted = cache_storage.delete_site_oss_only(site_id).await?;
             Ok(deleted as u64)
         }
@@ -268,7 +286,8 @@ async fn purge_site_inner(
             // Redis unavailable — fallback to OSS-only
             log::warn!(
                 "[Purge] Redis SCAN failed for site {}: {}, falling back to OSS listing",
-                site_id, e
+                site_id,
+                e
             );
             let deleted = cache_storage.delete_site_oss_only(site_id).await?;
             Ok(deleted as u64)
@@ -293,7 +312,13 @@ mod tests {
         }"#;
         let req: PurgeRequest = serde_json::from_str(json).unwrap();
         match req {
-            PurgeRequest::Url { site_id, host, path, query_string, .. } => {
+            PurgeRequest::Url {
+                site_id,
+                host,
+                path,
+                query_string,
+                ..
+            } => {
                 assert_eq!(site_id, "my-site");
                 assert_eq!(host, "example.com");
                 assert_eq!(path, "/assets/logo.png");

@@ -7,8 +7,8 @@ use async_trait::async_trait;
 /// cdn-proxy's RedisPool implements this trait.
 #[async_trait]
 pub trait RedisOps: Send + Sync {
-    /// GET a string value.
-    async fn get(&self, key: &str) -> Option<String>;
+    /// GET a string value. Returns Ok(None) for missing keys, Err for connection failures.
+    async fn get(&self, key: &str) -> Result<Option<String>, String>;
 
     /// SET a string value with expiry (seconds).
     async fn setex(&self, key: &str, seconds: u64, value: &str) -> Result<(), String>;

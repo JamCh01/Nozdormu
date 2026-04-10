@@ -90,16 +90,12 @@ impl AcmeClient {
                 // Attach EAB credentials
                 match name.to_lowercase().as_str() {
                     "zerossl" => {
-                        provider = provider.with_eab(
-                            eab.zerossl_kid.clone(),
-                            eab.zerossl_hmac_key.clone(),
-                        );
+                        provider = provider
+                            .with_eab(eab.zerossl_kid.clone(), eab.zerossl_hmac_key.clone());
                     }
                     "google" => {
-                        provider = provider.with_eab(
-                            eab.google_kid.clone(),
-                            eab.google_hmac_key.clone(),
-                        );
+                        provider =
+                            provider.with_eab(eab.google_kid.clone(), eab.google_hmac_key.clone());
                     }
                     _ => {}
                 }
@@ -130,10 +126,7 @@ impl AcmeClient {
     /// - ChallengeStore for HTTP-01 token serving
     /// - etcd for distributed locking and account storage
     /// These will be wired in when infrastructure is available.
-    pub async fn issue(
-        &self,
-        _domains: &[String],
-    ) -> Result<IssuedCert, AcmeError> {
+    pub async fn issue(&self, _domains: &[String]) -> Result<IssuedCert, AcmeError> {
         for provider in &self.providers {
             // Skip providers that require EAB but don't have credentials
             if provider.requires_eab()
@@ -148,7 +141,8 @@ impl AcmeClient {
 
             log::info!(
                 "[ACME] attempting issuance with provider={} directory={}",
-                provider.name, provider.directory_url
+                provider.name,
+                provider.directory_url
             );
 
             // TODO: Actual ACME protocol flow using instant-acme
