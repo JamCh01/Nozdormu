@@ -111,7 +111,7 @@ impl ProxyHttp for CdnProxy {
             if let Some(key_auth) = self.challenge_store.get_by_path(host_header, path) {
                 return self.serve_acme_challenge(session, &key_auth).await;
             }
-            return self.serve_not_found(session).await;
+            return self.serve_not_found(session, None).await;
         }
 
         // ── 3. Admin API (public, Bearer token auth) ──
@@ -149,7 +149,7 @@ impl ProxyHttp for CdnProxy {
                 .and_then(|a| a.as_inet())
                 .map(|a| a.ip());
             if !remote.map(crate::utils::ip::is_private_ip).unwrap_or(false) {
-                return self.serve_forbidden(session).await;
+                return self.serve_forbidden(session, None).await;
             }
             if path == "/health/detail" {
                 return self.serve_health_detail(session).await;
@@ -204,7 +204,7 @@ impl ProxyHttp for CdnProxy {
             }
             None => {
                 log::warn!("[Access] site not found: {}", &host);
-                return self.serve_not_found(session).await;
+                return self.serve_not_found(session, None).await;
             }
         }
 
@@ -249,7 +249,9 @@ impl ProxyHttp for CdnProxy {
                     &ctx.host,
                     path,
                 );
-                return self.serve_too_early(session).await;
+                return self
+                    .serve_too_early(session, ctx.site_config.as_ref().map(|s| &s.error_pages))
+                    .await;
             }
             crate::logging::metrics::EARLY_DATA_REQUESTS_TOTAL
                 .with_label_values(&[ctx.site_id.as_str(), "accepted"])
@@ -288,7 +290,12 @@ impl ProxyHttp for CdnProxy {
                     WafResult::Block { reason, .. } => {
                         ctx.waf_blocked = true;
                         ctx.waf_reason = Some(reason);
-                        return self.serve_forbidden(session).await;
+                        return self
+                            .serve_forbidden(
+                                session,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                     WafResult::Log { reason, .. } => {
                         ctx.waf_reason = Some(reason);
@@ -321,7 +328,14 @@ impl ProxyHttp for CdnProxy {
                         crate::logging::metrics::BODY_INSPECTION_TOTAL
                             .with_label_values(&[ctx.site_id.as_str(), "size_rejected"])
                             .inc();
-                        return self.serve_payload_too_large(session, limit, actual).await;
+                        return self
+                            .serve_payload_too_large(
+                                session,
+                                limit,
+                                actual,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                     cdn_middleware::waf::body::BodyCheckResult::Allow => {
                         if site
@@ -371,7 +385,13 @@ impl ProxyHttp for CdnProxy {
                     } => {
                         ctx.cc_blocked = true;
                         ctx.cc_reason = Some(reason);
-                        return self.serve_too_many_requests(session, retry_after).await;
+                        return self
+                            .serve_too_many_requests(
+                                session,
+                                retry_after,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                     CcActionResult::Challenge {
                         cookie_value,
@@ -384,7 +404,11 @@ impl ProxyHttp for CdnProxy {
                         ctx.cc_reason = Some(reason);
                         // Return 429 instead of sleeping to prevent task queue saturation under DDoS
                         return self
-                            .serve_too_many_requests(session, (delay_ms / 1000).max(1))
+                            .serve_too_many_requests(
+                                session,
+                                (delay_ms / 1000).max(1),
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
                             .await;
                     }
                     CcActionResult::Log { reason } => {
@@ -413,7 +437,12 @@ impl ProxyHttp for CdnProxy {
                         crate::logging::metrics::STREAMING_AUTH_TOTAL
                             .with_label_values(&[ctx.site_id.as_str(), "rejected"])
                             .inc();
-                        return self.serve_forbidden(session).await;
+                        return self
+                            .serve_forbidden(
+                                session,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                 }
             }
@@ -457,7 +486,13 @@ impl ProxyHttp for CdnProxy {
                 ProtocolType::WebSocket => {
                     if let Err(reason) = crate::protocol::validate_websocket(session) {
                         log::warn!("[Protocol] WebSocket validation failed: {}", reason);
-                        return self.serve_bad_request(session, reason).await;
+                        return self
+                            .serve_bad_request(
+                                session,
+                                reason,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                     ctx.cache_status = CacheStatus::Bypass;
                 }
@@ -472,7 +507,12 @@ impl ProxyHttp for CdnProxy {
                         &site.protocol.grpc.services,
                     ) {
                         log::warn!("[Protocol] gRPC service not in whitelist: {}", path);
-                        return self.serve_forbidden(session).await;
+                        return self
+                            .serve_forbidden(
+                                session,
+                                ctx.site_config.as_ref().map(|s| &s.error_pages),
+                            )
+                            .await;
                     }
                     ctx.cache_status = CacheStatus::Bypass;
                 }
@@ -744,7 +784,14 @@ impl ProxyHttp for CdnProxy {
                 crate::logging::metrics::BODY_INSPECTION_TOTAL
                     .with_label_values(&[ctx.site_id.as_str(), "size_rejected"])
                     .inc();
-                let _ = session.respond_error(413).await;
+                let _ = self
+                    .serve_error_with_page(
+                        session,
+                        413,
+                        "Payload Too Large\n",
+                        ctx.site_config.as_ref().map(|s| &s.error_pages),
+                    )
+                    .await;
                 return Ok(());
             }
 
@@ -786,7 +833,14 @@ impl ProxyHttp for CdnProxy {
                                 crate::logging::metrics::BODY_INSPECTION_TOTAL
                                     .with_label_values(&[ctx.site_id.as_str(), label])
                                     .inc();
-                                let _ = session.respond_error(403).await;
+                                let _ = self
+                                    .serve_error_with_page(
+                                        session,
+                                        403,
+                                        "Forbidden\n",
+                                        ctx.site_config.as_ref().map(|s| &s.error_pages),
+                                    )
+                                    .await;
                                 return Ok(());
                             }
                             _ => {}
@@ -2141,15 +2195,15 @@ impl CdnProxy {
         Ok(true)
     }
 
-    async fn serve_bad_request(&self, session: &mut Session, reason: &str) -> Result<bool> {
-        let body = format!("Bad Request: {}\n", reason);
-        let mut header = ResponseHeader::build(400, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
-        session
-            .write_response_header(Box::new(header), false)
-            .await?;
-        session.write_response_body(Some(body.into()), true).await?;
-        Ok(true)
+    async fn serve_bad_request(
+        &self,
+        session: &mut Session,
+        reason: &str,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
+    ) -> Result<bool> {
+        let default_body = format!("Bad Request: {}\n", reason);
+        self.serve_error_with_page(session, 400, &default_body, error_pages)
+            .await
     }
 
     async fn serve_acme_challenge(&self, session: &mut Session, key_auth: &str) -> Result<bool> {
@@ -2202,40 +2256,55 @@ impl CdnProxy {
         Ok(true)
     }
 
-    async fn serve_not_found(&self, session: &mut Session) -> Result<bool> {
-        let mut header = ResponseHeader::build(404, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
+    /// Serve an error response, using a custom error page if configured for this status code.
+    async fn serve_error_with_page(
+        &self,
+        session: &mut Session,
+        status: u16,
+        default_body: &str,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
+    ) -> Result<bool> {
+        let (body, content_type) = match error_pages.and_then(|ep| ep.get(&status)) {
+            Some(custom_html) => (custom_html.as_str(), "text/html; charset=utf-8"),
+            None => (default_body, "text/plain"),
+        };
+        let mut header = ResponseHeader::build(status, None)?;
+        header.insert_header("Content-Type", content_type)?;
+        header.insert_header("Content-Length", body.len().to_string())?;
         session
             .write_response_header(Box::new(header), false)
             .await?;
         session
-            .write_response_body(Some("Not Found\n".into()), true)
+            .write_response_body(Some(body.to_string().into()), true)
             .await?;
         Ok(true)
     }
 
-    async fn serve_forbidden(&self, session: &mut Session) -> Result<bool> {
-        let mut header = ResponseHeader::build(403, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
-        session
-            .write_response_header(Box::new(header), false)
-            .await?;
-        session
-            .write_response_body(Some("Forbidden\n".into()), true)
-            .await?;
-        Ok(true)
+    async fn serve_not_found(
+        &self,
+        session: &mut Session,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
+    ) -> Result<bool> {
+        self.serve_error_with_page(session, 404, "Not Found\n", error_pages)
+            .await
     }
 
-    async fn serve_too_early(&self, session: &mut Session) -> Result<bool> {
-        let mut header = ResponseHeader::build(425, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
-        session
-            .write_response_header(Box::new(header), false)
-            .await?;
-        session
-            .write_response_body(Some("425 Too Early\n".into()), true)
-            .await?;
-        Ok(true)
+    async fn serve_forbidden(
+        &self,
+        session: &mut Session,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
+    ) -> Result<bool> {
+        self.serve_error_with_page(session, 403, "Forbidden\n", error_pages)
+            .await
+    }
+
+    async fn serve_too_early(
+        &self,
+        session: &mut Session,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
+    ) -> Result<bool> {
+        self.serve_error_with_page(session, 425, "425 Too Early\n", error_pages)
+            .await
     }
 
     async fn serve_payload_too_large(
@@ -2243,37 +2312,37 @@ impl CdnProxy {
         session: &mut Session,
         limit: u64,
         actual: Option<u64>,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
     ) -> Result<bool> {
-        let body = match actual {
+        let default_body = match actual {
             Some(a) => format!(
                 "Payload Too Large: {} bytes exceeds limit of {} bytes\n",
                 a, limit
             ),
             None => format!("Payload Too Large: limit is {} bytes\n", limit),
         };
-        let mut header = ResponseHeader::build(413, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
-        session
-            .write_response_header(Box::new(header), false)
-            .await?;
-        session.write_response_body(Some(body.into()), true).await?;
-        Ok(true)
+        self.serve_error_with_page(session, 413, &default_body, error_pages)
+            .await
     }
 
     async fn serve_too_many_requests(
         &self,
         session: &mut Session,
         retry_after: u64,
+        error_pages: Option<&std::collections::HashMap<u16, String>>,
     ) -> Result<bool> {
+        let (body, content_type) = match error_pages.and_then(|ep| ep.get(&429)) {
+            Some(custom_html) => (custom_html.clone(), "text/html; charset=utf-8"),
+            None => ("Too Many Requests\n".to_string(), "text/plain"),
+        };
         let mut header = ResponseHeader::build(429, None)?;
-        header.insert_header("Content-Type", "text/plain")?;
+        header.insert_header("Content-Type", content_type)?;
+        header.insert_header("Content-Length", body.len().to_string())?;
         header.insert_header("Retry-After", retry_after.to_string())?;
         session
             .write_response_header(Box::new(header), false)
             .await?;
-        session
-            .write_response_body(Some("Too Many Requests\n".into()), true)
-            .await?;
+        session.write_response_body(Some(body.into()), true).await?;
         Ok(true)
     }
 

@@ -206,5 +206,11 @@
       "prefetch_count": 3,
       "concurrency_limit": 4
     }
+  },
+
+  "error_pages": {
+    "403": "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>403</title></head><body><h1>403 Forbidden</h1></body></html>",
+    "404": "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404</title></head><body><h1>404 Not Found</h1></body></html>",
+    "500": "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>500</title></head><body><h1>500 Internal Server Error</h1></body></html>"
   }
 }

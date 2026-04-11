@@ -170,6 +170,7 @@ mod tests {
             image_optimization: ImageOptimizationConfig::default(),
             range: RangeConfig::default(),
             streaming: StreamingConfig::default(),
+            error_pages: std::collections::HashMap::new(),
         }
     }
 

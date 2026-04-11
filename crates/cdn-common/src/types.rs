@@ -45,6 +45,9 @@ pub struct SiteConfig {
     pub range: RangeConfig,
     #[serde(default)]
     pub streaming: StreamingConfig,
+    /// Custom error pages: status code → inline HTML content.
+    #[serde(default)]
+    pub error_pages: std::collections::HashMap<u16, String>,
 }
 
 impl SiteConfig {

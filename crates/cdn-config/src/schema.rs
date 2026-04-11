@@ -126,10 +126,18 @@ pub fn validate_site_config(config: &SiteConfig) -> Vec<ValidationError> {
         }
     }
 
+    // error_pages: status codes must be 400-599
+    for code in config.error_pages.keys() {
+        if *code < 400 || *code > 599 {
+            errors.push(ValidationError {
+                path: format!("error_pages.{}", code),
+                message: "status code must be between 400 and 599".to_string(),
+            });
+        }
+    }
+
     errors
 }
-
-/// Validate a domain string.
 /// Supports wildcards: *.example.com
 /// Length 1-253, characters [a-zA-Z0-9-.*]
 pub fn validate_domain(domain: &str) -> Result<(), String> {
@@ -192,5 +200,81 @@ mod tests {
         assert!(validate_domain("*.*.example.com").is_err());
         // Bare wildcard with no suffix
         assert!(validate_domain("*.").is_err());
+    }
+
+    #[test]
+    fn test_error_pages_valid_codes() {
+        let json = r#"{
+            "site_id": "test",
+            "domains": ["example.com"],
+            "origins": [{"id": "o1", "host": "127.0.0.1", "port": 80, "weight": 10, "protocol": "http"}],
+            "error_pages": {
+                "403": "<h1>Forbidden</h1>",
+                "404": "<h1>Not Found</h1>",
+                "500": "<h1>Server Error</h1>",
+                "502": "<h1>Bad Gateway</h1>"
+            }
+        }"#;
+        let config: cdn_common::SiteConfig = serde_json::from_str(json).unwrap();
+        let errors = validate_site_config(&config);
+        assert!(
+            errors.iter().all(|e| !e.path.starts_with("error_pages")),
+            "valid error page codes should not produce errors"
+        );
+    }
+
+    #[test]
+    fn test_error_pages_invalid_codes() {
+        let json = r#"{
+            "site_id": "test",
+            "domains": ["example.com"],
+            "origins": [{"id": "o1", "host": "127.0.0.1", "port": 80, "weight": 10, "protocol": "http"}],
+            "error_pages": {
+                "200": "<h1>OK?</h1>",
+                "600": "<h1>Invalid</h1>"
+            }
+        }"#;
+        let config: cdn_common::SiteConfig = serde_json::from_str(json).unwrap();
+        let errors = validate_site_config(&config);
+        let ep_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.path.starts_with("error_pages"))
+            .collect();
+        assert_eq!(
+            ep_errors.len(),
+            2,
+            "should have 2 error_pages validation errors"
+        );
+    }
+
+    #[test]
+    fn test_error_pages_serde_roundtrip() {
+        let json = r#"{
+            "site_id": "test",
+            "domains": ["example.com"],
+            "origins": [{"id": "o1", "host": "127.0.0.1", "port": 80, "weight": 10, "protocol": "http"}],
+            "error_pages": {
+                "404": "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>"
+            }
+        }"#;
+        let config: cdn_common::SiteConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.error_pages.len(), 1);
+        assert!(config.error_pages.contains_key(&404));
+        assert!(config
+            .error_pages
+            .get(&404)
+            .unwrap()
+            .contains("404 Not Found"));
+    }
+
+    #[test]
+    fn test_error_pages_default_empty() {
+        let json = r#"{
+            "site_id": "test",
+            "domains": ["example.com"],
+            "origins": [{"id": "o1", "host": "127.0.0.1", "port": 80, "weight": 10, "protocol": "http"}]
+        }"#;
+        let config: cdn_common::SiteConfig = serde_json::from_str(json).unwrap();
+        assert!(config.error_pages.is_empty());
     }
 }

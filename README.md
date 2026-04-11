@@ -25,6 +25,7 @@
 - **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT/ACME 签发与续期/SWR 回源/请求合并/缓存预热 计数器，耗时直方图），**多后端多通道日志**（`LogSink` trait 抽象，支持 Redis Streams / Apache Kafka / RabbitMQ / NATS + JetStream / Apache Pulsar 五种后端，8 个独立日志通道：client_to_cdn / cdn_to_origin / origin_to_cdn / cdn_to_client / waf / cc / cache / access，每个通道独立 topic/subject/routing_key/stream_key + enabled 开关），**4 阶段请求计时**（client→CDN / CDN→origin / origin→CDN / CDN→client 毫秒级分段耗时），请求 ID 追踪
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
 - **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、配置版本历史查询与回滚、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务 + 按 Tag 清除）、缓存预热（批量 URL 回源写入缓存）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
+- **自定义错误页** -- 按站点、按状态码配置自定义 HTML 错误页面（`error_pages: HashMap<u16, String>`），覆盖 400/403/404/413/425/429 等错误响应；未配置的状态码回退到默认纯文本
 
 ## 架构
 
@@ -364,6 +365,10 @@ etcdctl put /nozdormu/global/redis '{
   "range": {
     "enabled": true,
     "chunk_size": 4194304
+  },
+  "error_pages": {
+    "403": "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>",
+    "404": "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>"
   }
 }
 ```
@@ -390,7 +395,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 ## 开发
 
 ```bash
-# 运行单元/集成测试（554 个测试）
+# 运行单元/集成测试（558 个测试）
 cargo test
 
 # 代码检查
