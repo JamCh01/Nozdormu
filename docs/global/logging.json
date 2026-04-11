@@ -1,31 +1,41 @@
 {
   "_doc": "etcd key: {prefix}/global/logging",
-  "_desc": "日志后端配置。支持 Redis Streams、Kafka、RabbitMQ、NATS、Pulsar 五种后端。每种后端支持 8 个独立日志通道，各通道可独立启用/禁用并路由到不同的 topic/subject/routing_key/stream_key。",
+  "_desc": "日志后端配置。支持 Redis Streams、Kafka、RabbitMQ、NATS (+JetStream)、Pulsar 五种后端。每种后端支持 8 个独立日志通道，各通道可独立启用/禁用并路由到不同的 topic/subject/routing_key/stream_key。",
 
-  "_push_to_redis": "（已废弃）是否将请求日志推送到 Redis Streams。当 backend 字段存在时忽略此字段",
+  "_legacy_fields": "以下两个字段为旧版兼容，当 backend 字段存在时忽略",
   "push_to_redis": true,
-
-  "_stream_max_len": "（已废弃）Redis Stream 最大长度。当 backend 字段存在时忽略此字段",
   "stream_max_len": 100000,
 
-  "_backend": "日志后端配置（新版）。type 字段选择后端类型：redis / kafka / rabbitmq / nats / pulsar",
+  "_backend": "新版日志后端配置。type 字段选择后端类型：redis / kafka / rabbitmq / nats / pulsar",
 
-  "_channels_doc": "8 个日志通道，每个通道有独立的 enabled 开关和 destination（目标名称）。destination 的含义取决于后端类型：Kafka/Pulsar=topic, NATS=subject, RabbitMQ=routing_key, Redis=stream_key",
+  "_channels_doc": "8 个日志通道，每个通道有独立的 enabled 开关和 destination（目标名称）。destination 的含义取决于后端类型：Kafka/Pulsar=topic, NATS=subject, RabbitMQ=routing_key, Redis=stream_key。未指定的通道使用默认值（enabled=true, destination=nozdormu-logs.{channel_name}）",
   "_channels": {
-    "_client_to_cdn": "客户端→CDN 阶段日志（请求接收、WAF/CC/缓存/路由处理耗时）",
-    "_cdn_to_origin": "CDN→源站 阶段日志（DNS解析+TCP连接+TLS握手耗时）",
-    "_origin_to_cdn": "源站→CDN 阶段日志（源站处理+响应头返回耗时）",
-    "_cdn_to_client": "CDN→客户端 阶段日志（响应处理+传输耗时）",
-    "_waf": "WAF 安全事件日志（拦截/放行）",
-    "_cc": "CC 频率限制事件日志（拦截/放行）",
-    "_cache": "缓存事件日志（命中/未命中/绕过）",
-    "_access": "完整请求日志（所有字段，等同于原始 LogEntry）"
+    "client_to_cdn": "客户端→CDN 阶段日志（请求接收、WAF/CC/缓存/路由处理耗时）",
+    "cdn_to_origin": "CDN→源站 阶段日志（DNS解析+TCP连接+TLS握手耗时）",
+    "origin_to_cdn": "源站→CDN 阶段日志（源站处理+响应头返回耗时）",
+    "cdn_to_client": "CDN→客户端 阶段日志（响应处理+传输耗时）",
+    "waf": "WAF 安全事件日志（拦截/放行）",
+    "cc": "CC 频率限制事件日志（拦截/放行）",
+    "cache": "缓存事件日志（命中/未命中/绕过）",
+    "access": "完整请求日志（所有字段，等同于原始 LogEntry）"
   },
 
   "backend": {
     "type": "kafka",
     "brokers": ["kafka1:9092", "kafka2:9092", "kafka3:9092"],
+    "_topic": "默认 topic（当 channels 中未指定 destination 时的回退值）",
     "topic": "nozdormu-logs",
+    "_client_id": "Kafka 客户端 ID（可选）",
+    "client_id": null,
+    "_security_protocol": "安全协议：plaintext / ssl / sasl_plaintext / sasl_ssl（可选）",
+    "security_protocol": null,
+    "_sasl_mechanism": "SASL 机制：PLAIN / SCRAM-SHA-256 / SCRAM-SHA-512（可选）",
+    "sasl_mechanism": null,
+    "sasl_username": null,
+    "sasl_password": null,
+    "_compression_type": "消息压缩：none / gzip / snappy / lz4 / zstd（可选）",
+    "compression_type": null,
+    "_acks": "确认模式：0（不等待）/ 1（leader 确认）/ all（所有副本确认）",
     "acks": "1",
     "channels": {
       "client_to_cdn": { "enabled": true, "destination": "nozdormu-logs.client_to_cdn" },
@@ -41,7 +51,11 @@
 
   "_backend_examples": {
     "_redis": {
+      "_desc": "Redis Streams 后端。destination 用作 stream_key",
       "type": "redis",
+      "_stream_key": "默认 stream key（旧版兼容字段）",
+      "stream_key": "nozdormu:log:requests",
+      "_max_len": "每个 stream 的最大长度（MAXLEN 近似裁剪）",
       "max_len": 100000,
       "channels": {
         "client_to_cdn": { "enabled": true, "destination": "nozdormu:log:client_to_cdn" },
@@ -54,13 +68,37 @@
         "access":        { "enabled": true, "destination": "nozdormu:log:access" }
       }
     },
+    "_kafka": {
+      "_desc": "Apache Kafka 后端。destination 用作 topic name。支持 SASL 认证和消息压缩",
+      "type": "kafka",
+      "brokers": ["kafka1:9092", "kafka2:9092"],
+      "topic": "nozdormu-logs",
+      "client_id": "nozdormu-cdn",
+      "security_protocol": "sasl_ssl",
+      "sasl_mechanism": "SCRAM-SHA-256",
+      "sasl_username": "cdn-logger",
+      "sasl_password": "secret",
+      "compression_type": "lz4",
+      "acks": "1",
+      "channels": {
+        "client_to_cdn": { "enabled": true, "destination": "nozdormu-logs.client_to_cdn" },
+        "access":        { "enabled": true, "destination": "nozdormu-logs.access" },
+        "waf":           { "enabled": true, "destination": "nozdormu-logs.waf" },
+        "cc":            { "enabled": false, "destination": "nozdormu-logs.cc" }
+      }
+    },
     "_rabbitmq": {
+      "_desc": "RabbitMQ 后端。destination 用作 routing_key。支持 direct/topic/fanout exchange",
       "type": "rabbitmq",
       "urls": ["amqp://user:pass@rabbit1:5672/%2f"],
+      "_exchange": "交换机名称",
       "exchange": "nozdormu.logs",
+      "_exchange_type": "交换机类型：direct / topic / fanout",
       "exchange_type": "direct",
+      "_routing_key": "默认 routing key（当 channels 中未指定 destination 时的回退值）",
+      "routing_key": "request",
+      "_durable": "交换机是否持久化",
       "durable": true,
-      "_note": "destination 用作 routing_key",
       "channels": {
         "client_to_cdn": { "enabled": true, "destination": "client_to_cdn" },
         "cdn_to_origin": { "enabled": true, "destination": "cdn_to_origin" },
@@ -73,24 +111,56 @@
       }
     },
     "_nats": {
+      "_desc": "NATS 后端（支持 JetStream）。destination 用作 subject。配置 stream_name 启用 JetStream 持久化",
       "type": "nats",
       "urls": ["nats://nats1:4222", "nats://nats2:4222"],
+      "_subject": "默认 subject（当 channels 中未指定 destination 时的回退值）",
       "subject": "nozdormu.logs",
+      "_stream_name": "JetStream stream 名称（设置后启用 JetStream，stream 自动创建并包含所有启用通道的 subject）",
       "stream_name": "CDN_LOGS",
-      "_note": "destination 用作 subject",
+      "_username": "NATS 用户名认证（可选）",
+      "username": null,
+      "password": null,
+      "_token": "NATS token 认证（可选，与 username/password 二选一）",
+      "token": null,
       "channels": {
         "client_to_cdn": { "enabled": true, "destination": "nozdormu.logs.client_to_cdn" },
+        "cdn_to_origin": { "enabled": true, "destination": "nozdormu.logs.cdn_to_origin" },
+        "origin_to_cdn": { "enabled": true, "destination": "nozdormu.logs.origin_to_cdn" },
+        "cdn_to_client": { "enabled": true, "destination": "nozdormu.logs.cdn_to_client" },
+        "waf":           { "enabled": true, "destination": "nozdormu.logs.waf" },
+        "cc":            { "enabled": true, "destination": "nozdormu.logs.cc" },
+        "cache":         { "enabled": true, "destination": "nozdormu.logs.cache" },
         "access":        { "enabled": true, "destination": "nozdormu.logs.access" }
       }
     },
     "_pulsar": {
+      "_desc": "Apache Pulsar 后端。destination 用作 topic，每个 topic 自动创建独立 producer（DashMap 懒加载）",
       "type": "pulsar",
       "urls": ["pulsar://pulsar1:6650"],
-      "_note": "destination 用作 topic，每个 topic 自动创建独立 producer",
+      "_topic": "默认 topic（当 channels 中未指定 destination 时的回退值）",
+      "topic": "persistent://public/default/nozdormu-logs",
+      "_token": "Pulsar JWT token 认证（可选）",
+      "token": null,
       "channels": {
         "client_to_cdn": { "enabled": true, "destination": "persistent://public/default/cdn-client-to-cdn" },
+        "cdn_to_origin": { "enabled": true, "destination": "persistent://public/default/cdn-cdn-to-origin" },
+        "origin_to_cdn": { "enabled": true, "destination": "persistent://public/default/cdn-origin-to-cdn" },
+        "cdn_to_client": { "enabled": true, "destination": "persistent://public/default/cdn-cdn-to-client" },
+        "waf":           { "enabled": true, "destination": "persistent://public/default/cdn-waf" },
+        "cc":            { "enabled": true, "destination": "persistent://public/default/cdn-cc" },
+        "cache":         { "enabled": true, "destination": "persistent://public/default/cdn-cache" },
         "access":        { "enabled": true, "destination": "persistent://public/default/cdn-access" }
       }
     }
+  },
+
+  "_feature_flags": {
+    "_desc": "每种后端通过 Cargo feature flag 编译。默认仅启用 redis-sink",
+    "redis-sink": "默认启用",
+    "kafka-sink": "需要 librdkafka（rdkafka crate）",
+    "rabbitmq-sink": "需要 lapin crate",
+    "nats-sink": "需要 async-nats crate",
+    "pulsar-sink": "需要 pulsar crate"
   }
 }
