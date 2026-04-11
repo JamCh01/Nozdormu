@@ -23,8 +23,8 @@ cargo test -p cdn-middleware cc::tests::test_over_rate_blocks
 # Check without building
 cargo check
 
-# Lint
-cargo clippy --workspace
+# Lint (must match CI: RUSTFLAGS="-D warnings" turns warnings into errors)
+RUSTFLAGS="-D warnings" cargo clippy --workspace
 
 # Format
 cargo fmt --all

@@ -101,6 +101,12 @@ pub struct WebhookDeliveryTracker {
     deliveries: DashMap<String, WebhookDeliveryStatus>,
 }
 
+impl Default for WebhookDeliveryTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebhookDeliveryTracker {
     pub fn new() -> Self {
         Self {
