@@ -16,10 +16,7 @@ pub enum PackagingRequest {
     /// Generate a specific fMP4 media segment by index
     MediaSegment(u32),
     /// Generate a specific fMP4 partial segment (part) for LL-HLS
-    PartialSegment {
-        segment_index: u32,
-        part_index: u32,
-    },
+    PartialSegment { segment_index: u32, part_index: u32 },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,9 +60,7 @@ pub fn process_packaging_request(
         PackagingRequest::LlHlsManifest => {
             let query_base = filter_query_params(query);
             let ll_config = ll_hls.ok_or_else(|| {
-                PackagingError::SegmentGen(
-                    "LL-HLS config required for LlHlsManifest".into(),
-                )
+                PackagingError::SegmentGen("LL-HLS config required for LlHlsManifest".into())
             })?;
             let playlist = hls_manifest::generate_ll_hls_playlist(
                 &metadata,
@@ -81,20 +76,12 @@ pub fn process_packaging_request(
             Ok(init)
         }
         PackagingRequest::MediaSegment(index) => {
-            let segment_count =
-                hls_manifest::compute_segment_count(&metadata, segment_duration);
+            let segment_count = hls_manifest::compute_segment_count(&metadata, segment_duration);
             if *index >= segment_count {
-                return Err(PackagingError::SegmentOutOfRange(
-                    *index,
-                    segment_count,
-                ));
+                return Err(PackagingError::SegmentOutOfRange(*index, segment_count));
             }
-            let segment = fmp4_gen::generate_media_segment(
-                mp4_data,
-                &metadata,
-                *index,
-                segment_duration,
-            )?;
+            let segment =
+                fmp4_gen::generate_media_segment(mp4_data, &metadata, *index, segment_duration)?;
             Ok(segment)
         }
         PackagingRequest::PartialSegment {
@@ -102,12 +89,9 @@ pub fn process_packaging_request(
             part_index,
         } => {
             let ll_config = ll_hls.ok_or_else(|| {
-                PackagingError::SegmentGen(
-                    "LL-HLS config required for PartialSegment".into(),
-                )
+                PackagingError::SegmentGen("LL-HLS config required for PartialSegment".into())
             })?;
-            let segment_count =
-                hls_manifest::compute_segment_count(&metadata, segment_duration);
+            let segment_count = hls_manifest::compute_segment_count(&metadata, segment_duration);
             if *segment_index >= segment_count {
                 return Err(PackagingError::SegmentOutOfRange(
                     *segment_index,
@@ -194,14 +178,9 @@ mod tests {
     #[test]
     fn test_filter_query_params_strips_ll_hls_params() {
         assert_eq!(
-            filter_query_params(Some(
-                "format=hls&_HLS_msn=5&_HLS_part=2&quality=high"
-            )),
+            filter_query_params(Some("format=hls&_HLS_msn=5&_HLS_part=2&quality=high")),
             "&quality=high"
         );
-        assert_eq!(
-            filter_query_params(Some("format=hls&part=3&segment=0")),
-            ""
-        );
+        assert_eq!(filter_query_params(Some("format=hls&part=3&segment=0")), "");
     }
 }

@@ -15,8 +15,8 @@ use cdn_proxy::dns::DnsResolver;
 use cdn_proxy::health::HealthChecker;
 use cdn_proxy::health_probe::ActiveHealthCheckService;
 use cdn_proxy::proxy::CdnProxy;
-use cdn_proxy::ssl::challenge::ChallengeStore;
 use cdn_proxy::ssl::acme::AcmeClient;
+use cdn_proxy::ssl::challenge::ChallengeStore;
 use cdn_proxy::ssl::manager::CertManager;
 use cdn_proxy::ssl::renewal::RenewalManager;
 use cdn_proxy::ssl::storage::CertStorage;
@@ -370,9 +370,8 @@ fn main() {
     if let Some(ref tls_addr) = cdn_config.tls_listen {
         let tls_accept = CdnTlsAccept::new(Arc::clone(&cert_manager));
         let callbacks: pingora::listeners::TlsAcceptCallbacks = Box::new(tls_accept);
-        let mut tls_settings =
-            pingora::listeners::tls::TlsSettings::with_callbacks(callbacks)
-                .expect("failed to create TLS settings");
+        let mut tls_settings = pingora::listeners::tls::TlsSettings::with_callbacks(callbacks)
+            .expect("failed to create TLS settings");
         tls_settings.enable_h2();
 
         if cdn_config.early_data {
@@ -501,10 +500,7 @@ fn build_log_sink(
             }
             #[cfg(feature = "kafka-sink")]
             cdn_log::LogBackendConfig::Kafka(cfg) => {
-                log::info!(
-                    "[Init] Log backend: Kafka (brokers={:?})",
-                    cfg.brokers
-                );
+                log::info!("[Init] Log backend: Kafka (brokers={:?})", cfg.brokers);
                 Box::new(
                     cdn_log::sink::kafka::KafkaSink::new(cfg)
                         .expect("Kafka sink initialization failed"),
@@ -512,10 +508,7 @@ fn build_log_sink(
             }
             #[cfg(feature = "rabbitmq-sink")]
             cdn_log::LogBackendConfig::RabbitMQ(cfg) => {
-                log::info!(
-                    "[Init] Log backend: RabbitMQ (exchange={})",
-                    cfg.exchange
-                );
+                log::info!("[Init] Log backend: RabbitMQ (exchange={})", cfg.exchange);
                 Box::new(cdn_log::sink::rabbitmq::RabbitMQSink::new(cfg.clone()))
             }
             #[cfg(feature = "nats-sink")]

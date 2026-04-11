@@ -137,8 +137,14 @@ impl PrefetchWorker {
                     match w.fetch_segment(&origin_url, &host_clone).await {
                         Ok((status, headers, body)) => {
                             let ttl = site_cfg.cache.default_ttl;
-                            let meta =
-                                storage::build_cache_meta(status, &headers, ttl, body.len() as u64, 0, Vec::new());
+                            let meta = storage::build_cache_meta(
+                                status,
+                                &headers,
+                                ttl,
+                                body.len() as u64,
+                                0,
+                                Vec::new(),
+                            );
                             if let Err(e) = w.cache_storage.put(&sid, &cache_key, &meta, body).await
                             {
                                 log::warn!("[Prefetch] cache put failed for {}: {}", cache_key, e);

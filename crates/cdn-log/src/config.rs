@@ -338,10 +338,7 @@ impl std::fmt::Debug for NatsLogConfig {
             .field("subject", &self.subject)
             .field("stream_name", &self.stream_name)
             .field("username", &self.username)
-            .field(
-                "password",
-                &self.password.as_ref().map(|_| "[REDACTED]"),
-            )
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
             .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
             .field("channels", &self.channels)
             .finish()

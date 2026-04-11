@@ -66,10 +66,7 @@ fn meta_key(prefix: &str, site_id: &str) -> String {
 }
 
 pub fn version_key(prefix: &str, site_id: &str, version: u64) -> String {
-    format!(
-        "{}/config_history/{}/v/{:010}",
-        prefix, site_id, version
-    )
+    format!("{}/config_history/{}/v/{:010}", prefix, site_id, version)
 }
 
 fn version_prefix(prefix: &str, site_id: &str) -> String {
@@ -126,11 +123,7 @@ pub async fn save_version(
             // Key does not exist — compare version == 0 (key absent)
             (
                 1,
-                etcd_client::Compare::version(
-                    mk.clone(),
-                    etcd_client::CompareOp::Equal,
-                    0,
-                ),
+                etcd_client::Compare::version(mk.clone(), etcd_client::CompareOp::Equal, 0),
             )
         };
 
@@ -152,12 +145,10 @@ pub async fn save_version(
         let vk = version_key(&etcd_config.prefix, site_id, new_version);
 
         // 3. CAS transaction: compare → put meta + put snapshot
-        let txn = etcd_client::Txn::new()
-            .when(vec![compare])
-            .and_then(vec![
-                etcd_client::TxnOp::put(mk.clone(), meta_json, None),
-                etcd_client::TxnOp::put(vk, snapshot_json, None),
-            ]);
+        let txn = etcd_client::Txn::new().when(vec![compare]).and_then(vec![
+            etcd_client::TxnOp::put(mk.clone(), meta_json, None),
+            etcd_client::TxnOp::put(vk, snapshot_json, None),
+        ]);
 
         let txn_resp = client.txn(txn).await?;
 
@@ -172,8 +163,7 @@ pub async fn save_version(
             // 4. Prune old versions if needed
             if new_version > MAX_VERSIONS_PER_SITE {
                 if let Err(e) =
-                    prune_old_versions(&mut client, &etcd_config.prefix, site_id, new_version)
-                        .await
+                    prune_old_versions(&mut client, &etcd_config.prefix, site_id, new_version).await
                 {
                     log::warn!(
                         "[config_history] failed to prune old versions for '{}': {}",
@@ -270,23 +260,14 @@ pub async fn rollback_to_version(
     let resp = client.get(vk.as_bytes(), None).await?;
     let snapshot = match resp.kvs().first() {
         Some(kv) => serde_json::from_slice::<ConfigVersionSnapshot>(kv.value())?,
-        None => {
-            return Err(format!(
-                "version {} not found for site '{}'",
-                version, site_id
-            )
-            .into())
-        }
+        None => return Err(format!("version {} not found for site '{}'", version, site_id).into()),
     };
 
     // 2. Write the config back to the live site key
     let site_key = format!("{}/sites/{}", etcd_config.prefix, site_id);
     let config_bytes = serde_json::to_vec(&snapshot.config)?;
     let put_resp = client.put(site_key, config_bytes.clone(), None).await?;
-    let put_revision = put_resp
-        .header()
-        .map(|h| h.revision())
-        .unwrap_or(0);
+    let put_revision = put_resp.header().map(|h| h.revision()).unwrap_or(0);
 
     // 3. Save a new version snapshot with Rollback type
     // Use the raw config bytes from the snapshot
@@ -323,9 +304,7 @@ async fn prune_old_versions(
     let range_end = version_key(prefix, site_id, cutoff + 1);
 
     let opts = etcd_client::DeleteOptions::new().with_range(range_end);
-    let resp = client
-        .delete(range_start.as_bytes(), Some(opts))
-        .await?;
+    let resp = client.delete(range_start.as_bytes(), Some(opts)).await?;
 
     let deleted = resp.deleted();
     if deleted > 0 {
@@ -395,9 +374,7 @@ mod tests {
 
     #[test]
     fn test_version_meta_serde() {
-        let meta = VersionMeta {
-            latest_version: 10,
-        };
+        let meta = VersionMeta { latest_version: 10 };
         let json = serde_json::to_string(&meta).unwrap();
         assert_eq!(json, r#"{"latest_version":10}"#);
 

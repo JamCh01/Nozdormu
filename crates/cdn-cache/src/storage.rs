@@ -157,19 +157,13 @@ impl CacheStorage {
                     let now = chrono::Utc::now().timestamp();
                     if meta.expires_at <= now {
                         // Check stale-while-revalidate window
-                        let stale_deadline =
-                            meta.expires_at + meta.stale_while_revalidate as i64;
+                        let stale_deadline = meta.expires_at + meta.stale_while_revalidate as i64;
                         if meta.stale_while_revalidate > 0 && stale_deadline > now {
                             // Within SWR window — return stale response
                             match oss.get_object(&object_path).await {
-                                Ok(body) => {
-                                    return Some((CachedResponse { meta, body }, true))
-                                }
+                                Ok(body) => return Some((CachedResponse { meta, body }, true)),
                                 Err(e) => {
-                                    log::warn!(
-                                        "[Cache] OSS get failed for stale entry: {}",
-                                        e
-                                    );
+                                    log::warn!("[Cache] OSS get failed for stale entry: {}", e);
                                     return None;
                                 }
                             }
@@ -180,11 +174,7 @@ impl CacheStorage {
                         let rk = redis_key.clone();
                         tokio::spawn(async move {
                             if let Err(e) = redis.del(&rk).await {
-                                log::warn!(
-                                    "[Cache] background Redis DEL failed: {} - {}",
-                                    rk,
-                                    e
-                                );
+                                log::warn!("[Cache] background Redis DEL failed: {} - {}", rk, e);
                             }
                         });
                         return None;
@@ -545,9 +535,7 @@ mod tests {
 
     #[test]
     fn test_parse_cache_tags_surrogate_key() {
-        let headers = vec![
-            ("surrogate-key".to_string(), "tag1 tag2 tag3".to_string()),
-        ];
+        let headers = vec![("surrogate-key".to_string(), "tag1 tag2 tag3".to_string())];
         let tags = parse_cache_tags(&headers);
         assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
     }
@@ -622,7 +610,14 @@ mod tests {
             ("content-type".to_string(), "text/html".to_string()),
             ("surrogate-key".to_string(), "tag1 tag2".to_string()),
         ];
-        let meta = build_cache_meta(200, &headers, 3600, 1024, 60, vec!["tag1".to_string(), "tag2".to_string()]);
+        let meta = build_cache_meta(
+            200,
+            &headers,
+            3600,
+            1024,
+            60,
+            vec!["tag1".to_string(), "tag2".to_string()],
+        );
         assert_eq!(meta.status, 200);
         assert_eq!(meta.stale_while_revalidate, 60);
         assert_eq!(meta.tags, vec!["tag1", "tag2"]);

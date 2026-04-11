@@ -567,20 +567,12 @@ impl ProxyHttp for CdnProxy {
                                     ctx.cache_status = CacheStatus::Hit;
                                     ctx.cache_key = Some(cache_key);
                                     crate::logging::metrics::CACHE_COALESCING_TOTAL
-                                        .with_label_values(&[
-                                            ctx.site_id.as_str(),
-                                            "waited_hit",
-                                        ])
+                                        .with_label_values(&[ctx.site_id.as_str(), "waited_hit"])
                                         .inc();
-                                    return self
-                                        .serve_cached_response(session, ctx, cached)
-                                        .await;
+                                    return self.serve_cached_response(session, ctx, cached).await;
                                 }
                                 crate::logging::metrics::CACHE_COALESCING_TOTAL
-                                    .with_label_values(&[
-                                        ctx.site_id.as_str(),
-                                        "waited_miss",
-                                    ])
+                                    .with_label_values(&[ctx.site_id.as_str(), "waited_miss"])
                                     .inc();
                             } else {
                                 crate::logging::metrics::CACHE_COALESCING_TOTAL
@@ -660,8 +652,7 @@ impl ProxyHttp for CdnProxy {
                         query.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("segment=")));
                     let part_param =
                         query.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("part=")));
-                    let ll_hls_enabled =
-                        site.streaming.dynamic_packaging.ll_hls.enabled;
+                    let ll_hls_enabled = site.streaming.dynamic_packaging.ll_hls.enabled;
 
                     ctx.packaging_request = Some(match (segment_param, part_param) {
                         (Some("init"), _) => {
@@ -1015,8 +1006,7 @@ impl ProxyHttp for CdnProxy {
                         resp_cc,
                         expires,
                     );
-                    let swr =
-                        cdn_cache::strategy::parse_stale_while_revalidate(resp_cc);
+                    let swr = cdn_cache::strategy::parse_stale_while_revalidate(resp_cc);
                     ctx.cache_ttl = Some(final_ttl);
 
                     // Capture response headers for cache meta
@@ -1133,7 +1123,9 @@ impl ProxyHttp for CdnProxy {
                         }
                         Some(cdn_streaming::packaging::PackagingRequest::InitSegment)
                         | Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_))
-                        | Some(cdn_streaming::packaging::PackagingRequest::PartialSegment { .. }) => {
+                        | Some(cdn_streaming::packaging::PackagingRequest::PartialSegment {
+                            ..
+                        }) => {
                             upstream_response
                                 .insert_header("Content-Type", "video/mp4")
                                 .ok();
@@ -1362,8 +1354,7 @@ impl ProxyHttp for CdnProxy {
                 if let (Some(buffers), Some(ref cache_key), Some(ttl)) =
                     (ctx.response_body.take(), &ctx.cache_key, ctx.cache_ttl)
                 {
-                    let full_body: Vec<u8> =
-                        buffers.into_iter().flatten().collect();
+                    let full_body: Vec<u8> = buffers.into_iter().flatten().collect();
                     let meta = cdn_cache::storage::build_cache_meta(
                         ctx.cached_response_status,
                         &ctx.cached_response_headers,
@@ -1476,9 +1467,9 @@ impl ProxyHttp for CdnProxy {
                             Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
                                 "segment"
                             }
-                            Some(cdn_streaming::packaging::PackagingRequest::PartialSegment { .. }) => {
-                                "part"
-                            }
+                            Some(cdn_streaming::packaging::PackagingRequest::PartialSegment {
+                                ..
+                            }) => "part",
                             None => "unknown",
                         };
                         crate::logging::metrics::PACKAGING_TOTAL
@@ -1712,8 +1703,7 @@ impl ProxyHttp for CdnProxy {
             // Decrement active connection count for least-conn balancing
             self.balancer.conn_dec(&ctx.site_id, &origin.id);
             // Record response stats for adaptive weight adjustment
-            let latency_ms =
-                ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+            let latency_ms = ctx.start_time.elapsed().as_secs_f64() * 1000.0;
             let is_error = status >= 500 || status == 0;
             let window_size = ctx
                 .site_config
@@ -1975,8 +1965,7 @@ impl CdnProxy {
                     }
                     None if !rest.is_empty() => {
                         // /config/history/{site_id} — list versions
-                        crate::admin::endpoints::config_history(&self.admin_state, rest)
-                            .await
+                        crate::admin::endpoints::config_history(&self.admin_state, rest).await
                     }
                     _ => (
                         400,
@@ -1988,9 +1977,7 @@ impl CdnProxy {
             ("POST", p) if p.starts_with("/config/rollback/") => {
                 let rest = &p[17..]; // strip "/config/rollback/"
                 match rest.split_once('/') {
-                    Some((site_id, ver_str))
-                        if !site_id.is_empty() && !ver_str.is_empty() =>
-                    {
+                    Some((site_id, ver_str)) if !site_id.is_empty() && !ver_str.is_empty() => {
                         match ver_str.parse::<u64>() {
                             Ok(version) => {
                                 crate::admin::endpoints::config_rollback(
@@ -2014,10 +2001,7 @@ impl CdnProxy {
             }
             // Adaptive weight status
             ("GET", "/adaptive/weights") => {
-                crate::admin::endpoints::get_adaptive_weights(
-                    &self.admin_state,
-                )
-                .await
+                crate::admin::endpoints::get_adaptive_weights(&self.admin_state).await
             }
             ("GET", "/log/status") => {
                 crate::admin::endpoints::get_log_status(&self.admin_state).await
@@ -2383,9 +2367,7 @@ impl CdnProxy {
         header
             .insert_header("X-Cache-Status", ctx.cache_status.as_str())
             .ok();
-        header
-            .insert_header("X-Request-ID", &ctx.request_id)
-            .ok();
+        header.insert_header("X-Request-ID", &ctx.request_id).ok();
         let age = (chrono::Utc::now().timestamp() - cached.meta.cached_at).max(0);
         header.insert_header("Age", age.to_string()).ok();
         header
@@ -2464,8 +2446,7 @@ impl CdnProxy {
                                 cc,
                                 expires_h,
                             );
-                            let swr =
-                                cdn_cache::strategy::parse_stale_while_revalidate(cc);
+                            let swr = cdn_cache::strategy::parse_stale_while_revalidate(cc);
                             let tags = cdn_cache::storage::parse_cache_tags(&headers);
                             let meta = cdn_cache::storage::build_cache_meta(
                                 status,
@@ -2475,8 +2456,9 @@ impl CdnProxy {
                                 swr,
                                 tags,
                             );
-                            if let Err(e) =
-                                storage.put(&site_id, &cache_key, &meta, body.to_vec()).await
+                            if let Err(e) = storage
+                                .put(&site_id, &cache_key, &meta, body.to_vec())
+                                .await
                             {
                                 log::warn!("[SWR] revalidation cache write failed: {}", e);
                                 crate::logging::metrics::CACHE_SWR_REVALIDATION_TOTAL

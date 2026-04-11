@@ -22,11 +22,7 @@ pub mod redis;
 #[async_trait]
 pub trait LogSink: Send + Sync + 'static {
     /// Send a batch of JSON-serialized log entries to a specific destination.
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError>;
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError>;
 
     /// Flush any buffered data. Called on graceful shutdown.
     async fn flush(&self) -> Result<(), LogSinkError>;

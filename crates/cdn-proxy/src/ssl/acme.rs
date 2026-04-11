@@ -217,10 +217,8 @@ impl AcmeClient {
         let account = self.get_or_create_account(provider).await?;
 
         // 2. Create order
-        let identifiers: Vec<Identifier> = domains
-            .iter()
-            .map(|d| Identifier::Dns(d.clone()))
-            .collect();
+        let identifiers: Vec<Identifier> =
+            domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
         let mut order = account
             .new_order(&NewOrder {
@@ -263,10 +261,7 @@ impl AcmeClient {
                 .await
                 .map_err(|e| {
                     self.cleanup_challenges(&challenge_tokens);
-                    AcmeError::ChallengeError(format!(
-                        "set_challenge_ready for {}: {}",
-                        domain, e
-                    ))
+                    AcmeError::ChallengeError(format!("set_challenge_ready for {}: {}", domain, e))
                 })?;
         }
 
@@ -302,10 +297,7 @@ impl AcmeClient {
                         .as_ref()
                         .map(|e| format!("{:?}", e))
                         .unwrap_or_else(|| "unknown".to_string());
-                    return Err(AcmeError::OrderError(format!(
-                        "order invalid: {}",
-                        detail
-                    )));
+                    return Err(AcmeError::OrderError(format!("order invalid: {}", detail)));
                 }
                 _ => {
                     // Pending or Processing — exponential backoff up to 10s
@@ -365,10 +357,7 @@ impl AcmeClient {
     ///
     /// Account credentials are persisted in Redis for reuse across issuances
     /// and cluster nodes.
-    async fn get_or_create_account(
-        &self,
-        provider: &AcmeProvider,
-    ) -> Result<Account, AcmeError> {
+    async fn get_or_create_account(&self, provider: &AcmeProvider) -> Result<Account, AcmeError> {
         let redis_key = Self::account_redis_key(&provider.name, self.email.as_deref());
 
         // Try to restore from Redis
@@ -376,10 +365,7 @@ impl AcmeClient {
             match serde_json::from_str::<AccountCredentials>(&json) {
                 Ok(creds) => match Account::from_credentials(creds).await {
                     Ok(account) => {
-                        log::info!(
-                            "[ACME] restored account for provider={}",
-                            provider.name
-                        );
+                        log::info!("[ACME] restored account for provider={}", provider.name);
                         return Ok(account);
                     }
                     Err(e) => {
@@ -425,11 +411,7 @@ impl AcmeClient {
         // Persist credentials to Redis (TTL: 365 days)
         match serde_json::to_string(&credentials) {
             Ok(json) => {
-                if let Err(e) = self
-                    .redis_pool
-                    .setex(&redis_key, 365 * 86400, &json)
-                    .await
-                {
+                if let Err(e) = self.redis_pool.setex(&redis_key, 365 * 86400, &json).await {
                     log::warn!("[ACME] failed to persist account to Redis: {}", e);
                 }
             }
@@ -438,27 +420,19 @@ impl AcmeClient {
             }
         }
 
-        log::info!(
-            "[ACME] created new account for provider={}",
-            provider.name
-        );
+        log::info!("[ACME] created new account for provider={}", provider.name);
         Ok(account)
     }
 
     /// Build ExternalAccountKey for providers that require EAB.
-    fn build_eab(
-        &self,
-        provider: &AcmeProvider,
-    ) -> Result<Option<ExternalAccountKey>, AcmeError> {
+    fn build_eab(&self, provider: &AcmeProvider) -> Result<Option<ExternalAccountKey>, AcmeError> {
         match (&provider.eab_kid, &provider.eab_hmac_key) {
             (Some(kid), Some(hmac_b64)) => {
                 use base64::prelude::{Engine, BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
                 let hmac_bytes = BASE64_URL_SAFE_NO_PAD
                     .decode(hmac_b64)
                     .or_else(|_| BASE64_STANDARD.decode(hmac_b64))
-                    .map_err(|e| {
-                        AcmeError::AccountError(format!("EAB HMAC decode: {}", e))
-                    })?;
+                    .map_err(|e| AcmeError::AccountError(format!("EAB HMAC decode: {}", e)))?;
                 Ok(Some(ExternalAccountKey::new(kid.clone(), &hmac_bytes)))
             }
             _ => Ok(None),

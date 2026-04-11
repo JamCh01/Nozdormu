@@ -52,11 +52,7 @@ impl KafkaSink {
 
 #[async_trait]
 impl LogSink for KafkaSink {
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError> {
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError> {
         let mut last_err = None;
         for json in entries {
             let record = FutureRecord::to(destination).payload(json).key("");

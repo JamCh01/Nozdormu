@@ -643,13 +643,10 @@ pub fn part_sample_range(
         if current_sample >= seg_end {
             return (seg_end, seg_end);
         }
-        let current_dts =
-            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
-        let target_end_dts =
-            current_dts + (part_duration * track.timescale as f64) as u64;
+        let current_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let target_end_dts = current_dts + (part_duration * track.timescale as f64) as u64;
 
-        let mut end_sample =
-            mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
+        let mut end_sample = mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
         // Ensure at least one sample per part
         if end_sample <= current_sample {
             end_sample = current_sample + 1;
@@ -691,10 +688,13 @@ pub fn generate_partial_segment(
     // First pass: build traf per track with placeholder offset, collect mdat
     for track in &metadata.tracks {
         let (ps, pe) = part_sample_range(
-            track, segment_index, part_index, segment_duration, part_duration,
+            track,
+            segment_index,
+            part_index,
+            segment_duration,
+            part_duration,
         );
-        let (traf, track_mdat) =
-            build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
+        let (traf, track_mdat) = build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
         moof_content.extend_from_slice(&traf);
         mdat_payload.extend_from_slice(&track_mdat);
     }
@@ -710,7 +710,11 @@ pub fn generate_partial_segment(
     let mut track_data_offset = 0u32;
     for track in &metadata.tracks {
         let (ps, pe) = part_sample_range(
-            track, segment_index, part_index, segment_duration, part_duration,
+            track,
+            segment_index,
+            part_index,
+            segment_duration,
+            part_duration,
         );
         let (traf, _) = build_traf_for_sample_range(
             mp4_data,
@@ -719,8 +723,7 @@ pub fn generate_partial_segment(
             pe,
             moof_size + 8 + track_data_offset,
         )?;
-        let (_, track_mdat) =
-            build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
+        let (_, track_mdat) = build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
         track_data_offset += track_mdat.len() as u32;
         final_moof_content.extend_from_slice(&traf);
     }
@@ -906,8 +909,7 @@ mod tests {
         let metadata = make_test_metadata();
         let mp4_data = vec![0xABu8; 400000];
 
-        let part =
-            generate_partial_segment(&mp4_data, &metadata, 0, 0, 6.0, 0.5).unwrap();
+        let part = generate_partial_segment(&mp4_data, &metadata, 0, 0, 6.0, 0.5).unwrap();
 
         assert!(part.windows(4).any(|w| w == b"moof"));
         assert!(part.windows(4).any(|w| w == b"mdat"));

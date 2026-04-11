@@ -809,6 +809,7 @@ mod tests {
         buf.extend_from_slice(&val.to_be_bytes());
     }
 
+    #[allow(dead_code)]
     fn write_u16(buf: &mut Vec<u8>, val: u16) {
         buf.extend_from_slice(&val.to_be_bytes());
     }
@@ -1140,7 +1141,7 @@ mod tests {
 
         // Parse it manually
         let stbl_data = atom_data;
-        let stbl = Atom {
+        let _stbl = Atom {
             fourcc: *b"stbl",
             header_size: 0,
             data_start: 0,

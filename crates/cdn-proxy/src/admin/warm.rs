@@ -131,11 +131,7 @@ pub async fn warm_urls_background(
         task_id
     );
 
-    let origin = match site_config
-        .origins
-        .iter()
-        .find(|o| o.enabled && !o.backup)
-    {
+    let origin = match site_config.origins.iter().find(|o| o.enabled && !o.backup) {
         Some(o) => o.clone(),
         None => {
             log::error!("[Warm] no healthy origin for site {}", site_id);
@@ -233,8 +229,7 @@ pub async fn warm_urls_background(
                                 cc,
                                 expires_h,
                             );
-                            let swr =
-                                cdn_cache::strategy::parse_stale_while_revalidate(cc);
+                            let swr = cdn_cache::strategy::parse_stale_while_revalidate(cc);
                             let tags = cdn_cache::storage::parse_cache_tags(&headers);
                             let meta = cdn_cache::storage::build_cache_meta(
                                 status,

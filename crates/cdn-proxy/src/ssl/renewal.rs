@@ -93,9 +93,7 @@ impl RenewalManager {
 
             if !domain_lock.acquire(&self.redis_pool).await {
                 log::info!("[Renewal] {} locked by another node, skipping", domain);
-                ACME_RENEWAL_TOTAL
-                    .with_label_values(&["skipped"])
-                    .inc();
+                ACME_RENEWAL_TOTAL.with_label_values(&["skipped"]).inc();
                 continue;
             }
 
@@ -104,9 +102,7 @@ impl RenewalManager {
                 if !fresh_cert.needs_renewal(self.renewal_days) {
                     log::info!("[Renewal] {} already renewed by another node", domain);
                     let _ = domain_lock.release(&self.redis_pool).await;
-                    ACME_RENEWAL_TOTAL
-                        .with_label_values(&["skipped"])
-                        .inc();
+                    ACME_RENEWAL_TOTAL.with_label_values(&["skipped"]).inc();
                     continue;
                 }
             }
@@ -120,9 +116,8 @@ impl RenewalManager {
 
             match self.acme.issue(&domains_to_renew).await {
                 Ok(issued) => {
-                    let expires_at =
-                        crate::ssl::storage::CertData::parse_expiry(&issued.cert_pem)
-                            .unwrap_or(chrono::Utc::now().timestamp() + 86400 * 90);
+                    let expires_at = crate::ssl::storage::CertData::parse_expiry(&issued.cert_pem)
+                        .unwrap_or(chrono::Utc::now().timestamp() + 86400 * 90);
                     let new_cert = crate::ssl::storage::CertData {
                         cert_pem: issued.cert_pem,
                         key_pem: issued.key_pem,
@@ -137,15 +132,11 @@ impl RenewalManager {
                     self.cert_manager.invalidate(domain).await;
 
                     renewed += 1;
-                    ACME_RENEWAL_TOTAL
-                        .with_label_values(&["success"])
-                        .inc();
+                    ACME_RENEWAL_TOTAL.with_label_values(&["success"]).inc();
                     log::info!("[Renewal] successfully renewed cert for {}", domain);
                 }
                 Err(e) => {
-                    ACME_RENEWAL_TOTAL
-                        .with_label_values(&["failure"])
-                        .inc();
+                    ACME_RENEWAL_TOTAL.with_label_values(&["failure"]).inc();
                     log::error!("[Renewal] failed to renew cert for {}: {}", domain, e);
                 }
             }

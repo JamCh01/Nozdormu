@@ -329,11 +329,7 @@ pub async fn purge_cache(state: &AdminState, body: &[u8]) -> (u16, Value) {
                 );
             }
 
-            log::info!(
-                "[Admin] cache purge tag: site={} tag={}",
-                site_id,
-                tag
-            );
+            log::info!("[Admin] cache purge tag: site={} tag={}", site_id, tag);
 
             match state.cache_storage.delete_by_tag(&site_id, &tag).await {
                 Ok(deleted) => (
@@ -528,11 +524,7 @@ pub async fn config_version_detail(
 }
 
 /// POST /_admin/config/rollback/{site_id}/{version} — Rollback to a previous version.
-pub async fn config_rollback(
-    state: &AdminState,
-    site_id: &str,
-    version: u64,
-) -> (u16, Value) {
+pub async fn config_rollback(state: &AdminState, site_id: &str, version: u64) -> (u16, Value) {
     if let Err(e) = validate_site_id(site_id) {
         return (400, json!({"status": "error", "message": e}));
     }
@@ -583,14 +575,10 @@ pub async fn get_adaptive_weights(state: &AdminState) -> (u16, Value) {
     for (site_id, site) in &config.sites {
         let adaptive_cfg = &site.load_balancer.adaptive_weight;
         for origin in &site.origins {
-            let eff = state.balancer.effective_weight(
-                site_id,
-                origin,
-                adaptive_cfg,
-            );
-            let summary = state
+            let eff = state
                 .balancer
-                .get_origin_stats_summary(site_id, &origin.id);
+                .effective_weight(site_id, origin, adaptive_cfg);
+            let summary = state.balancer.get_origin_stats_summary(site_id, &origin.id);
             data.push(json!({
                 "site_id": site_id,
                 "origin_id": origin.id,

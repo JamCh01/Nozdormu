@@ -9,13 +9,8 @@ use std::sync::Arc;
 #[async_trait]
 pub trait RedisStreamOps: Send + Sync + 'static {
     /// XADD to a Redis Stream with approximate MAXLEN trimming.
-    async fn xadd(
-        &self,
-        stream: &str,
-        maxlen: u64,
-        field: &str,
-        value: &str,
-    ) -> Result<(), String>;
+    async fn xadd(&self, stream: &str, maxlen: u64, field: &str, value: &str)
+        -> Result<(), String>;
 
     /// Whether the Redis connection is available.
     fn is_available(&self) -> bool;
@@ -37,11 +32,7 @@ impl RedisStreamSink {
 
 #[async_trait]
 impl LogSink for RedisStreamSink {
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError> {
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError> {
         if !self.pool.is_available() {
             return Err(LogSinkError::Connection(
                 "Redis pool not available".to_string(),

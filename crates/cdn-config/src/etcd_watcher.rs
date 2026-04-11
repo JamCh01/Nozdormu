@@ -241,11 +241,14 @@ impl EtcdConfigManager {
                                 let sid = site_id.clone();
                                 let raw = kv.value().to_vec();
                                 tokio::spawn(async move {
-                                    if let Err(e) =
-                                        crate::config_history::save_version(
-                                            &cfg, &sid, &raw, rev, change_type,
-                                        )
-                                        .await
+                                    if let Err(e) = crate::config_history::save_version(
+                                        &cfg,
+                                        &sid,
+                                        &raw,
+                                        rev,
+                                        change_type,
+                                    )
+                                    .await
                                     {
                                         log::warn!(
                                             "[config_history] failed to save version for '{}': {}",

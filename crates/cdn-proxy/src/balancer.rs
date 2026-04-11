@@ -1,9 +1,7 @@
 use crate::context::ProtocolType;
 use crate::dns::DnsResolver;
 use crate::health::HealthChecker;
-use cdn_common::{
-    AdaptiveWeightConfig, LbAlgorithm, OriginConfig, OriginProtocol, SiteConfig,
-};
+use cdn_common::{AdaptiveWeightConfig, LbAlgorithm, OriginConfig, OriginProtocol, SiteConfig};
 use dashmap::DashMap;
 use pingora::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -77,9 +75,15 @@ impl DynamicBalancer {
         let key = format!("{}\0{}", site_id, origin_id);
         if let Some(counter) = self.active_conns.get(&key) {
             // Saturating: avoid underflow from double-dec edge cases
-            counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                if v > 0 { Some(v - 1) } else { None }
-            }).ok();
+            counter
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    if v > 0 {
+                        Some(v - 1)
+                    } else {
+                        None
+                    }
+                })
+                .ok();
         }
     }
 
@@ -131,9 +135,7 @@ impl DynamicBalancer {
             Some(entry) => {
                 let stats = entry.value();
                 // Stale data (>60s no traffic) or empty → no penalty
-                if stats.last_update.elapsed().as_secs() > 60
-                    || stats.samples.is_empty()
-                {
+                if stats.last_update.elapsed().as_secs() > 60 || stats.samples.is_empty() {
                     return origin.weight;
                 }
                 compute_multiplier(stats, config)
@@ -144,11 +146,7 @@ impl DynamicBalancer {
     }
 
     /// Get stats summary for admin API.
-    pub fn get_origin_stats_summary(
-        &self,
-        site_id: &str,
-        origin_id: &str,
-    ) -> OriginStatsSummary {
+    pub fn get_origin_stats_summary(&self, site_id: &str, origin_id: &str) -> OriginStatsSummary {
         let key = format!("{}\0{}", site_id, origin_id);
         match self.origin_stats.get(&key) {
             Some(entry) => {
@@ -159,8 +157,7 @@ impl DynamicBalancer {
                 } else {
                     None
                 };
-                let error_count =
-                    stats.samples.iter().filter(|(_, e)| *e).count();
+                let error_count = stats.samples.iter().filter(|(_, e)| *e).count();
                 let error_rate = if sample_count > 0 {
                     error_count as f64 / sample_count as f64
                 } else {
@@ -230,23 +227,14 @@ impl DynamicBalancer {
 
         // Step 4: Apply LB algorithm
         let selected = match &site.load_balancer.algorithm {
-            LbAlgorithm::RoundRobin => {
-                self.select_round_robin(&candidates, &eff_weights)
-            }
+            LbAlgorithm::RoundRobin => self.select_round_robin(&candidates, &eff_weights),
             LbAlgorithm::IpHash => {
-                let ip = client_ip
-                    .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+                let ip = client_ip.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
                 self.select_ip_hash(&candidates, &eff_weights, ip)
             }
-            LbAlgorithm::Random => {
-                self.select_weighted_random(&candidates, &eff_weights)
-            }
+            LbAlgorithm::Random => self.select_weighted_random(&candidates, &eff_weights),
             LbAlgorithm::LeastConn => {
-                self.select_least_conn(
-                    &candidates,
-                    &eff_weights,
-                    &site.site_id,
-                )
+                self.select_least_conn(&candidates, &eff_weights, &site.site_id)
             }
         };
 
@@ -300,8 +288,7 @@ impl DynamicBalancer {
     ) -> &'a OriginConfig {
         let total_weight: u32 = eff_weights.iter().sum();
         if total_weight == 0 {
-            let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed)
-                % candidates.len();
+            let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % candidates.len();
             return candidates[idx];
         }
 
@@ -333,17 +320,16 @@ impl DynamicBalancer {
             return candidates[hash as usize % candidates.len()];
         }
         let ip_hash = sip_hash(&ip.to_string());
-        let idx =
-            match ring.binary_search_by_key(&ip_hash, |&(point, _)| point) {
-                Ok(i) => i,
-                Err(i) => {
-                    if i >= ring.len() {
-                        0
-                    } else {
-                        i
-                    }
+        let idx = match ring.binary_search_by_key(&ip_hash, |&(point, _)| point) {
+            Ok(i) => i,
+            Err(i) => {
+                if i >= ring.len() {
+                    0
+                } else {
+                    i
                 }
-            };
+            }
+        };
         candidates[ring[idx].1]
     }
 
@@ -378,15 +364,11 @@ impl DynamicBalancer {
         site_id: &str,
     ) -> &'a OriginConfig {
         let mut best_idx = 0;
-        let mut best_conns =
-            self.active_conn_count(site_id, &candidates[0].id);
+        let mut best_conns = self.active_conn_count(site_id, &candidates[0].id);
 
         for i in 1..candidates.len() {
-            let conns =
-                self.active_conn_count(site_id, &candidates[i].id);
-            if conns < best_conns
-                || (conns == best_conns
-                    && eff_weights[i] > eff_weights[best_idx])
+            let conns = self.active_conn_count(site_id, &candidates[i].id);
+            if conns < best_conns || (conns == best_conns && eff_weights[i] > eff_weights[best_idx])
             {
                 best_idx = i;
                 best_conns = conns;
@@ -433,10 +415,7 @@ fn build_hash_ring(candidates: &[&OriginConfig]) -> Vec<(u64, usize)> {
 }
 
 /// Compute weight multiplier from origin stats. Returns value in [0.1, 1.0].
-fn compute_multiplier(
-    stats: &OriginStats,
-    config: &AdaptiveWeightConfig,
-) -> f64 {
+fn compute_multiplier(stats: &OriginStats, config: &AdaptiveWeightConfig) -> f64 {
     // P99 latency factor
     let latency_factor = if stats.samples.len() < 10 {
         1.0 // Not enough data
@@ -473,17 +452,10 @@ fn penalty_factor(value: f64, low: f64, high: f64) -> f64 {
 }
 
 /// Compute percentile from samples (sort-based).
-fn percentile_latency(
-    samples: &VecDeque<(f64, bool)>,
-    pct: f64,
-) -> f64 {
-    let mut latencies: Vec<f64> =
-        samples.iter().map(|(l, _)| *l).collect();
-    latencies.sort_unstable_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let idx =
-        ((latencies.len() as f64 * pct).ceil() as usize).saturating_sub(1);
+fn percentile_latency(samples: &VecDeque<(f64, bool)>, pct: f64) -> f64 {
+    let mut latencies: Vec<f64> = samples.iter().map(|(l, _)| *l).collect();
+    latencies.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((latencies.len() as f64 * pct).ceil() as usize).saturating_sub(1);
     latencies[idx.min(latencies.len() - 1)]
 }
 
@@ -570,8 +542,7 @@ mod tests {
         let w = static_weights(&candidates);
 
         let first = balancer.select_round_robin(&candidates, &w).id.clone();
-        let second =
-            balancer.select_round_robin(&candidates, &w).id.clone();
+        let second = balancer.select_round_robin(&candidates, &w).id.clone();
         // Should alternate
         assert_ne!(first, second);
     }
@@ -588,10 +559,8 @@ mod tests {
         let w = static_weights(&candidates);
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
 
-        let first =
-            balancer.select_ip_hash(&candidates, &w, ip).id.clone();
-        let second =
-            balancer.select_ip_hash(&candidates, &w, ip).id.clone();
+        let first = balancer.select_ip_hash(&candidates, &w, ip).id.clone();
+        let second = balancer.select_ip_hash(&candidates, &w, ip).id.clone();
         // Same IP should always select the same origin
         assert_eq!(first, second);
     }
@@ -610,8 +579,7 @@ mod tests {
 
         // With total_weight=100, all selections should go to "heavy"
         for _ in 0..10 {
-            let selected =
-                balancer.select_weighted_random(&candidates, &w);
+            let selected = balancer.select_weighted_random(&candidates, &w);
             assert_eq!(selected.id, "heavy");
         }
     }
@@ -637,8 +605,7 @@ mod tests {
             balancer.conn_inc("site1", "c");
         }
 
-        let selected =
-            balancer.select_least_conn(&candidates, &w, "site1");
+        let selected = balancer.select_least_conn(&candidates, &w, "site1");
         assert_eq!(selected.id, "b");
     }
 
@@ -654,8 +621,7 @@ mod tests {
         let candidates: Vec<&OriginConfig> = vec![&o1, &o2];
         let w = static_weights(&candidates);
 
-        let selected =
-            balancer.select_least_conn(&candidates, &w, "site1");
+        let selected = balancer.select_least_conn(&candidates, &w, "site1");
         assert_eq!(selected.id, "heavy");
     }
 
@@ -689,8 +655,7 @@ mod tests {
         let candidates: Vec<&OriginConfig> = vec![&o1, &o2];
         let w = static_weights(&candidates);
 
-        let selected =
-            balancer.select_least_conn(&candidates, &w, "site1");
+        let selected = balancer.select_least_conn(&candidates, &w, "site1");
         assert_eq!(selected.id, "a");
     }
 
@@ -712,12 +677,9 @@ mod tests {
         let mut remapped = 0;
         let total = 1000;
         for i in 0..total {
-            let ip: IpAddr =
-                format!("10.0.{}.{}", i / 256, i % 256).parse().unwrap();
-            let with_three =
-                balancer.select_ip_hash(&three, &w3, ip).id.clone();
-            let with_two =
-                balancer.select_ip_hash(&two, &w2, ip).id.clone();
+            let ip: IpAddr = format!("10.0.{}.{}", i / 256, i % 256).parse().unwrap();
+            let with_three = balancer.select_ip_hash(&three, &w3, ip).id.clone();
+            let with_two = balancer.select_ip_hash(&two, &w2, ip).id.clone();
             // IPs that were on "c" must remap; IPs on "a" or "b" should mostly stay
             if with_three != "c" && with_three != with_two {
                 remapped += 1;
@@ -743,14 +705,9 @@ mod tests {
         let mut heavy_count = 0;
         let total = 2000;
         for i in 0..total {
-            let ip: IpAddr = format!(
-                "10.{}.{}.{}",
-                i / 65536,
-                (i / 256) % 256,
-                i % 256
-            )
-            .parse()
-            .unwrap();
+            let ip: IpAddr = format!("10.{}.{}.{}", i / 65536, (i / 256) % 256, i % 256)
+                .parse()
+                .unwrap();
             if balancer.select_ip_hash(&candidates, &w, ip).id == "heavy" {
                 heavy_count += 1;
             }
@@ -781,8 +738,7 @@ mod tests {
 
     #[test]
     fn test_percentile_latency() {
-        let samples: VecDeque<(f64, bool)> =
-            (1..=100).map(|i| (i as f64, false)).collect();
+        let samples: VecDeque<(f64, bool)> = (1..=100).map(|i| (i as f64, false)).collect();
         let p99 = percentile_latency(&samples, 0.99);
         assert_eq!(p99, 99.0);
         let p50 = percentile_latency(&samples, 0.50);
@@ -857,8 +813,7 @@ mod tests {
         }
         // Manually set last_update to >60s ago
         if let Some(mut entry) = balancer.origin_stats.get_mut("s\0a") {
-            entry.last_update =
-                Instant::now() - std::time::Duration::from_secs(120);
+            entry.last_update = Instant::now() - std::time::Duration::from_secs(120);
         }
         // Stale data → returns static weight
         assert_eq!(balancer.effective_weight("s", &o, &cfg), 10);
@@ -886,7 +841,7 @@ mod tests {
         let balancer = DynamicBalancer::new(hc, dns);
         let o = origin("a", 10, false);
         let cfg = default_adaptive(); // disabled
-        // Record terrible stats
+                                      // Record terrible stats
         for _ in 0..100 {
             balancer.record_response("s", "a", 5000.0, true, 100);
         }
@@ -910,8 +865,7 @@ mod tests {
         let mut healthy_count = 0;
         let total = 1100;
         for _ in 0..total {
-            let selected =
-                balancer.select_round_robin(&candidates, &eff_weights);
+            let selected = balancer.select_round_robin(&candidates, &eff_weights);
             if selected.id == "healthy" {
                 healthy_count += 1;
             }
@@ -951,9 +905,6 @@ mod tests {
         assert_eq!(summary.sample_count, 50);
         assert!(summary.p99_latency.is_some());
         let err = summary.error_rate;
-        assert!(
-            (err - 0.1).abs() < 0.01,
-            "error_rate={err}, expected 0.1"
-        );
+        assert!((err - 0.1).abs() < 0.01, "error_rate={err}, expected 0.1");
     }
 }

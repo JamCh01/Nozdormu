@@ -57,10 +57,7 @@ impl NatsSink {
             js.get_or_create_stream(stream_config).await.map_err(|e| {
                 LogSinkError::Connection(format!("JetStream stream setup failed: {}", e))
             })?;
-            log::info!(
-                "[LogSink:nats] JetStream enabled, stream: {}",
-                stream_name
-            );
+            log::info!("[LogSink:nats] JetStream enabled, stream: {}", stream_name);
             Some(js)
         } else {
             None
@@ -74,11 +71,7 @@ impl NatsSink {
 
 #[async_trait]
 impl LogSink for NatsSink {
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError> {
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError> {
         let mut last_err = None;
         for json in entries {
             let payload = Bytes::from(json.clone());
@@ -99,10 +92,7 @@ impl LogSink for NatsSink {
             }
         }
         match last_err {
-            Some(e) => Err(LogSinkError::Send(format!(
-                "NATS send error (last): {}",
-                e
-            ))),
+            Some(e) => Err(LogSinkError::Send(format!("NATS send error (last): {}", e))),
             None => Ok(()),
         }
     }

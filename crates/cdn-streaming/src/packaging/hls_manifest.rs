@@ -178,13 +178,10 @@ pub fn compute_segment_parts(
     let mut part_idx = 0u32;
 
     while current_sample < seg_end {
-        let current_dts =
-            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
-        let target_end_dts =
-            current_dts + (part_duration * track.timescale as f64) as u64;
+        let current_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let target_end_dts = current_dts + (part_duration * track.timescale as f64) as u64;
 
-        let mut end_sample =
-            mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
+        let mut end_sample = mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
         // Ensure at least one sample per part
         if end_sample <= current_sample {
             end_sample = current_sample + 1;
@@ -193,10 +190,8 @@ pub fn compute_segment_parts(
             end_sample = seg_end;
         }
 
-        let start_dts =
-            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
-        let end_dts =
-            mp4_parse::sample_to_dts(&track.sample_table.stts, end_sample);
+        let start_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let end_dts = mp4_parse::sample_to_dts(&track.sample_table.stts, end_sample);
         let dur = if track.timescale > 0 {
             (end_dts - start_dts) as f64 / track.timescale as f64
         } else {
@@ -205,7 +200,7 @@ pub fn compute_segment_parts(
 
         // Check if first sample in part is a sync sample (keyframe)
         let independent = match &track.sample_table.stss {
-            None => true, // No stss = all samples are sync
+            None => true,                                       // No stss = all samples are sync
             Some(stss) => stss.contains(&(current_sample + 1)), // 1-based
         };
 
@@ -229,8 +224,7 @@ pub fn compute_part_count(
     part_duration: f64,
     segment_index: u32,
 ) -> u32 {
-    compute_segment_parts(metadata, segment_duration, part_duration, segment_index)
-        .len() as u32
+    compute_segment_parts(metadata, segment_duration, part_duration, segment_index).len() as u32
 }
 
 /// Generate an LL-HLS-enhanced VOD media playlist (M3U8).
@@ -261,8 +255,7 @@ pub fn generate_ll_hls_playlist(
     // Compute actual max part duration across all segments for PART-TARGET
     let mut actual_max_part_duration: f64 = 0.0;
     for (seg_idx, _) in &segments {
-        let parts =
-            compute_segment_parts(metadata, segment_duration, part_duration, *seg_idx);
+        let parts = compute_segment_parts(metadata, segment_duration, part_duration, *seg_idx);
         for part in &parts {
             if part.duration_secs > actual_max_part_duration {
                 actual_max_part_duration = part.duration_secs;
@@ -302,8 +295,7 @@ pub fn generate_ll_hls_playlist(
     // Media segments with parts
     for (idx, duration) in &segments {
         // Parts for this segment
-        let parts =
-            compute_segment_parts(metadata, segment_duration, part_duration, *idx);
+        let parts = compute_segment_parts(metadata, segment_duration, part_duration, *idx);
         for part in &parts {
             let independent_attr = if part.independent {
                 ",INDEPENDENT=YES"
@@ -312,12 +304,7 @@ pub fn generate_ll_hls_playlist(
             };
             playlist.push_str(&format!(
                 "#EXT-X-PART:DURATION={:.6},URI=\"{}?format=hls&segment={}&part={}{}\"{}\n",
-                part.duration_secs,
-                base_url,
-                idx,
-                part.part_index,
-                query_base,
-                independent_attr,
+                part.duration_secs, base_url, idx, part.part_index, query_base, independent_attr,
             ));
         }
         // Full segment
@@ -500,8 +487,7 @@ mod tests {
     #[test]
     fn test_ll_hls_playlist_with_query() {
         let meta = make_test_metadata(6.0, 180);
-        let playlist =
-            generate_ll_hls_playlist(&meta, 6.0, 0.5, "/video.mp4", "&quality=high");
+        let playlist = generate_ll_hls_playlist(&meta, 6.0, 0.5, "/video.mp4", "&quality=high");
         assert!(playlist.contains("&quality=high"));
     }
 

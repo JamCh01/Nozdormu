@@ -83,11 +83,7 @@ impl RabbitMQSink {
 
 #[async_trait]
 impl LogSink for RabbitMQSink {
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError> {
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError> {
         let channel = self.get_channel().await?;
         let mut last_err = None;
         for json in entries {
@@ -110,7 +106,11 @@ impl LogSink for RabbitMQSink {
                     }
                 }
                 Err(e) => {
-                    log::warn!("[LogSink:rabbitmq] publish to {} failed: {}", destination, e);
+                    log::warn!(
+                        "[LogSink:rabbitmq] publish to {} failed: {}",
+                        destination,
+                        e
+                    );
                     last_err = Some(e.to_string());
                     let mut guard = self.channel.write().await;
                     *guard = None;

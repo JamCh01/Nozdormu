@@ -70,11 +70,7 @@ impl PulsarSink {
 
 #[async_trait]
 impl LogSink for PulsarSink {
-    async fn send(
-        &self,
-        destination: &str,
-        entries: &[String],
-    ) -> Result<(), LogSinkError> {
+    async fn send(&self, destination: &str, entries: &[String]) -> Result<(), LogSinkError> {
         let producer_arc = self.get_producer(destination).await?;
         let mut producer = producer_arc.lock().await;
         let mut last_err = None;
@@ -82,7 +78,11 @@ impl LogSink for PulsarSink {
             match producer.send_non_blocking(json.as_str()).await {
                 Ok(receipt) => {
                     if let Err(e) = receipt.await {
-                        log::warn!("[LogSink:pulsar] send to {} receipt error: {}", destination, e);
+                        log::warn!(
+                            "[LogSink:pulsar] send to {} receipt error: {}",
+                            destination,
+                            e
+                        );
                         last_err = Some(e.to_string());
                     }
                 }

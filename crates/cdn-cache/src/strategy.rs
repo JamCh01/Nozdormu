@@ -583,8 +583,7 @@ mod tests {
 
     #[test]
     fn test_swr_case_insensitive() {
-        let swr =
-            parse_stale_while_revalidate(Some("Max-Age=300, Stale-While-Revalidate=120"));
+        let swr = parse_stale_while_revalidate(Some("Max-Age=300, Stale-While-Revalidate=120"));
         assert_eq!(swr, 120);
     }
 }
