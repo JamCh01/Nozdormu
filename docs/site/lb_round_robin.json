@@ -31,6 +31,17 @@
       "expected_codes": null,
       "_host_header": "覆盖探针请求的 Host 头，null 使用源站 host",
       "host_header": null
+    },
+    "_adaptive_weight_doc": "自适应权重：基于滑动窗口 P99 延迟和错误率自动调整 origin 有效权重",
+    "adaptive_weight": {
+      "_enabled": "是否启用自适应权重调整（默认 false）",
+      "enabled": false,
+      "_window_size": "滑动窗口大小（每个 origin 的请求采样数，默认 100）",
+      "window_size": 100,
+      "_latency_threshold_ms": "P99 延迟阈值（ms），低于此值不惩罚（默认 500）",
+      "latency_threshold_ms": 500.0,
+      "_error_threshold": "错误率阈值（0.0-1.0），低于此值不惩罚（默认 0.1 即 10%）",
+      "error_threshold": 0.1
     }
   }
 }

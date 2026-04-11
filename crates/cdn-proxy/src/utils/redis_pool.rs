@@ -426,6 +426,23 @@ impl RedisOps for RedisPool {
     }
 }
 
+#[async_trait]
+impl cdn_log::sink::redis::RedisStreamOps for RedisPool {
+    async fn xadd(
+        &self,
+        stream: &str,
+        maxlen: u64,
+        field: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        self.xadd(stream, maxlen, field, value).await
+    }
+
+    fn is_available(&self) -> bool {
+        self.is_available()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

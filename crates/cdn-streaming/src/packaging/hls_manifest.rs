@@ -134,6 +134,204 @@ pub fn generate_media_playlist(
     playlist
 }
 
+// ── LL-HLS (Low-Latency HLS) playlist generation ──
+
+/// Information about a single partial segment within a segment.
+#[derive(Debug, Clone)]
+pub struct PartInfo {
+    pub part_index: u32,
+    pub duration_secs: f64,
+    /// Whether this part starts with an independent frame (keyframe).
+    /// Maps to `INDEPENDENT=YES` attribute on `#EXT-X-PART`.
+    pub independent: bool,
+}
+
+/// Compute the parts for a given segment.
+///
+/// Returns a Vec of `PartInfo` describing each part's duration and
+/// whether it begins with a keyframe (independent decodable).
+pub fn compute_segment_parts(
+    metadata: &Mp4Metadata,
+    segment_duration: f64,
+    part_duration: f64,
+    segment_index: u32,
+) -> Vec<PartInfo> {
+    let track = metadata
+        .tracks
+        .iter()
+        .find(|t| t.track_type == TrackType::Video)
+        .or_else(|| metadata.tracks.first());
+
+    let track = match track {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let (seg_start, seg_end) =
+        super::fmp4_gen::segment_sample_range(track, segment_index, segment_duration);
+    if seg_start >= seg_end {
+        return Vec::new();
+    }
+
+    let mut parts = Vec::new();
+    let mut current_sample = seg_start;
+    let mut part_idx = 0u32;
+
+    while current_sample < seg_end {
+        let current_dts =
+            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let target_end_dts =
+            current_dts + (part_duration * track.timescale as f64) as u64;
+
+        let mut end_sample =
+            mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
+        // Ensure at least one sample per part
+        if end_sample <= current_sample {
+            end_sample = current_sample + 1;
+        }
+        if end_sample > seg_end {
+            end_sample = seg_end;
+        }
+
+        let start_dts =
+            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let end_dts =
+            mp4_parse::sample_to_dts(&track.sample_table.stts, end_sample);
+        let dur = if track.timescale > 0 {
+            (end_dts - start_dts) as f64 / track.timescale as f64
+        } else {
+            part_duration
+        };
+
+        // Check if first sample in part is a sync sample (keyframe)
+        let independent = match &track.sample_table.stss {
+            None => true, // No stss = all samples are sync
+            Some(stss) => stss.contains(&(current_sample + 1)), // 1-based
+        };
+
+        parts.push(PartInfo {
+            part_index: part_idx,
+            duration_secs: dur,
+            independent,
+        });
+
+        current_sample = end_sample;
+        part_idx += 1;
+    }
+
+    parts
+}
+
+/// Compute total number of parts for a given segment.
+pub fn compute_part_count(
+    metadata: &Mp4Metadata,
+    segment_duration: f64,
+    part_duration: f64,
+    segment_index: u32,
+) -> u32 {
+    compute_segment_parts(metadata, segment_duration, part_duration, segment_index)
+        .len() as u32
+}
+
+/// Generate an LL-HLS-enhanced VOD media playlist (M3U8).
+///
+/// Includes `#EXT-X-PART` tags for each partial segment,
+/// `#EXT-X-PART-INF`, and `#EXT-X-SERVER-CONTROL`.
+///
+/// - `base_url`: the original resource URL (e.g., `/video.mp4`)
+/// - `query_base`: additional query params to append (e.g., `&quality=high`)
+pub fn generate_ll_hls_playlist(
+    metadata: &Mp4Metadata,
+    segment_duration: f64,
+    part_duration: f64,
+    base_url: &str,
+    query_base: &str,
+) -> String {
+    let segments = compute_segment_durations(metadata, segment_duration);
+    if segments.is_empty() {
+        return String::from("#EXTM3U\n#EXT-X-ENDLIST\n");
+    }
+
+    let max_duration = segments
+        .iter()
+        .map(|(_, d)| *d)
+        .fold(0.0f64, f64::max)
+        .ceil() as u32;
+
+    // Compute actual max part duration across all segments for PART-TARGET
+    let mut actual_max_part_duration: f64 = 0.0;
+    for (seg_idx, _) in &segments {
+        let parts =
+            compute_segment_parts(metadata, segment_duration, part_duration, *seg_idx);
+        for part in &parts {
+            if part.duration_secs > actual_max_part_duration {
+                actual_max_part_duration = part.duration_secs;
+            }
+        }
+    }
+    // Fallback if no parts were computed
+    if actual_max_part_duration <= 0.0 {
+        actual_max_part_duration = part_duration;
+    }
+
+    let part_hold_back = actual_max_part_duration * 3.0;
+
+    let mut playlist = String::new();
+    playlist.push_str("#EXTM3U\n");
+    playlist.push_str("#EXT-X-VERSION:9\n");
+    playlist.push_str(&format!("#EXT-X-TARGETDURATION:{}\n", max_duration));
+    playlist.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
+    playlist.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+
+    // LL-HLS specific tags
+    playlist.push_str(&format!(
+        "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={:.3}\n",
+        part_hold_back,
+    ));
+    playlist.push_str(&format!(
+        "#EXT-X-PART-INF:PART-TARGET={:.6}\n",
+        actual_max_part_duration,
+    ));
+
+    // Init segment (shared with regular HLS)
+    playlist.push_str(&format!(
+        "#EXT-X-MAP:URI=\"{}?format=hls&segment=init{}\"\n",
+        base_url, query_base
+    ));
+
+    // Media segments with parts
+    for (idx, duration) in &segments {
+        // Parts for this segment
+        let parts =
+            compute_segment_parts(metadata, segment_duration, part_duration, *idx);
+        for part in &parts {
+            let independent_attr = if part.independent {
+                ",INDEPENDENT=YES"
+            } else {
+                ""
+            };
+            playlist.push_str(&format!(
+                "#EXT-X-PART:DURATION={:.6},URI=\"{}?format=hls&segment={}&part={}{}\"{}\n",
+                part.duration_secs,
+                base_url,
+                idx,
+                part.part_index,
+                query_base,
+                independent_attr,
+            ));
+        }
+        // Full segment
+        playlist.push_str(&format!("#EXTINF:{:.6},\n", duration));
+        playlist.push_str(&format!(
+            "{}?format=hls&segment={}{}\n",
+            base_url, idx, query_base
+        ));
+    }
+
+    playlist.push_str("#EXT-X-ENDLIST\n");
+    playlist
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::mp4_parse::{
@@ -251,5 +449,79 @@ mod tests {
         let playlist = generate_media_playlist(&meta, 6.0, "/v.mp4", "");
         // TARGETDURATION should be the ceiling of the max segment duration
         assert!(playlist.contains("#EXT-X-TARGETDURATION:"));
+    }
+
+    // ── LL-HLS tests ──
+
+    #[test]
+    fn test_compute_segment_parts() {
+        let meta = make_test_metadata(12.0, 360); // 12s, 360 samples @ 30fps
+        let parts = compute_segment_parts(&meta, 6.0, 0.5, 0);
+        assert!(!parts.is_empty());
+        // At 30fps, 0.5s ≈ 15 samples per part, segment 0 ~180 samples
+        // So expect ~12 parts
+        assert!(parts.len() >= 10);
+        // First part should be independent (starts at keyframe)
+        assert!(parts[0].independent);
+        // Durations should be positive and reasonable
+        for part in &parts {
+            assert!(part.duration_secs > 0.0);
+            assert!(part.duration_secs <= 1.5);
+        }
+    }
+
+    #[test]
+    fn test_compute_part_count() {
+        let meta = make_test_metadata(6.0, 180);
+        let count = compute_part_count(&meta, 6.0, 0.5, 0);
+        assert!(count > 0);
+    }
+
+    #[test]
+    fn test_generate_ll_hls_playlist() {
+        let meta = make_test_metadata(12.0, 360);
+        let playlist = generate_ll_hls_playlist(&meta, 6.0, 0.5, "/video.mp4", "");
+
+        assert!(playlist.starts_with("#EXTM3U\n"));
+        assert!(playlist.contains("#EXT-X-VERSION:9"));
+        assert!(playlist.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
+        assert!(playlist.contains("#EXT-X-SERVER-CONTROL:"));
+        assert!(playlist.contains("CAN-BLOCK-RELOAD=YES"));
+        assert!(playlist.contains("PART-HOLD-BACK="));
+        assert!(playlist.contains("#EXT-X-PART-INF:PART-TARGET="));
+        assert!(playlist.contains("#EXT-X-PART:DURATION="));
+        assert!(playlist.contains("&part="));
+        assert!(playlist.contains("INDEPENDENT=YES"));
+        assert!(playlist.contains("#EXT-X-MAP:URI="));
+        assert!(playlist.contains("#EXTINF:"));
+        assert!(playlist.ends_with("#EXT-X-ENDLIST\n"));
+    }
+
+    #[test]
+    fn test_ll_hls_playlist_with_query() {
+        let meta = make_test_metadata(6.0, 180);
+        let playlist =
+            generate_ll_hls_playlist(&meta, 6.0, 0.5, "/video.mp4", "&quality=high");
+        assert!(playlist.contains("&quality=high"));
+    }
+
+    #[test]
+    fn test_standard_playlist_unchanged_when_ll_hls_off() {
+        let meta = make_test_metadata(12.0, 360);
+        let playlist = generate_media_playlist(&meta, 6.0, "/video.mp4", "");
+        assert!(!playlist.contains("#EXT-X-PART"));
+        assert!(!playlist.contains("#EXT-X-SERVER-CONTROL"));
+        assert!(playlist.contains("#EXT-X-VERSION:7"));
+    }
+
+    #[test]
+    fn test_ll_hls_empty_metadata() {
+        let meta = Mp4Metadata {
+            duration_secs: 0.0,
+            timescale: 1000,
+            tracks: vec![],
+        };
+        let playlist = generate_ll_hls_playlist(&meta, 6.0, 0.5, "/v.mp4", "");
+        assert_eq!(playlist, "#EXTM3U\n#EXT-X-ENDLIST\n");
     }
 }

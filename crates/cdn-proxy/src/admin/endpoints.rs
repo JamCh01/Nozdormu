@@ -27,6 +27,8 @@ pub struct AdminState {
     pub redis_pool: Arc<RedisPool>,
     pub purge_tracker: Arc<PurgeTaskTracker>,
     pub warm_tracker: Arc<WarmTaskTracker>,
+    /// Active log backend name for status endpoint.
+    pub log_backend_name: String,
 }
 
 /// Constant-time byte comparison (re-export from cdn-common).
@@ -469,4 +471,148 @@ pub async fn warm_status(state: &AdminState, task_id: &str) -> (u16, Value) {
 pub async fn warm_list_tasks(state: &AdminState) -> (u16, Value) {
     let tasks = state.warm_tracker.list();
     (200, json!({ "tasks": tasks }))
+}
+
+// ── Config version management ──
+
+/// GET /_admin/config/history/{site_id} — List config version history.
+pub async fn config_history(state: &AdminState, site_id: &str) -> (u16, Value) {
+    if let Err(e) = validate_site_id(site_id) {
+        return (400, json!({"status": "error", "message": e}));
+    }
+
+    let etcd_config = state.etcd_manager.etcd_config();
+    match cdn_config::config_history::list_versions(etcd_config, site_id).await {
+        Ok(versions) => (
+            200,
+            json!({
+                "site_id": site_id,
+                "versions": serde_json::to_value(&versions).unwrap_or(json!([])),
+            }),
+        ),
+        Err(e) => (
+            500,
+            json!({"status": "error", "message": format!("failed to list versions: {}", e)}),
+        ),
+    }
+}
+
+/// GET /_admin/config/history/{site_id}/{version} — Get a specific version snapshot.
+pub async fn config_version_detail(
+    state: &AdminState,
+    site_id: &str,
+    version: u64,
+) -> (u16, Value) {
+    if let Err(e) = validate_site_id(site_id) {
+        return (400, json!({"status": "error", "message": e}));
+    }
+
+    let etcd_config = state.etcd_manager.etcd_config();
+    match cdn_config::config_history::get_version(etcd_config, site_id, version).await {
+        Ok(Some(snapshot)) => (
+            200,
+            serde_json::to_value(&snapshot).unwrap_or(json!({"status": "error"})),
+        ),
+        Ok(None) => (
+            404,
+            json!({
+                "status": "error",
+                "message": format!("version {} not found for site '{}'", version, site_id),
+            }),
+        ),
+        Err(e) => (
+            500,
+            json!({"status": "error", "message": format!("failed to get version: {}", e)}),
+        ),
+    }
+}
+
+/// POST /_admin/config/rollback/{site_id}/{version} — Rollback to a previous version.
+pub async fn config_rollback(
+    state: &AdminState,
+    site_id: &str,
+    version: u64,
+) -> (u16, Value) {
+    if let Err(e) = validate_site_id(site_id) {
+        return (400, json!({"status": "error", "message": e}));
+    }
+
+    let etcd_config = state.etcd_manager.etcd_config();
+    match cdn_config::config_history::rollback_to_version(etcd_config, site_id, version).await {
+        Ok((new_version, put_revision)) => {
+            // Tag the resulting watch event as Rollback
+            state.etcd_manager.set_pending_change_type(
+                site_id.to_string(),
+                put_revision,
+                cdn_config::config_history::ConfigChangeType::Rollback,
+            );
+
+            log::info!(
+                "[Admin] config rollback: site={} to_version={} new_version={}",
+                site_id,
+                version,
+                new_version
+            );
+
+            (
+                200,
+                json!({
+                    "status": "ok",
+                    "message": format!("rolled back site '{}' to version {}", site_id, version),
+                    "site_id": site_id,
+                    "rolled_back_to": version,
+                    "new_version": new_version,
+                }),
+            )
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if msg.contains("not found") { 404 } else { 500 };
+            (
+                status,
+                json!({"status": "error", "message": format!("rollback failed: {}", msg)}),
+            )
+        }
+    }
+}
+
+/// GET /_admin/adaptive/weights — View current effective weights for all origins.
+pub async fn get_adaptive_weights(state: &AdminState) -> (u16, Value) {
+    let config = state.live_config.load();
+    let mut data = Vec::new();
+    for (site_id, site) in &config.sites {
+        let adaptive_cfg = &site.load_balancer.adaptive_weight;
+        for origin in &site.origins {
+            let eff = state.balancer.effective_weight(
+                site_id,
+                origin,
+                adaptive_cfg,
+            );
+            let summary = state
+                .balancer
+                .get_origin_stats_summary(site_id, &origin.id);
+            data.push(json!({
+                "site_id": site_id,
+                "origin_id": origin.id,
+                "static_weight": origin.weight,
+                "effective_weight": eff,
+                "adaptive_enabled": adaptive_cfg.enabled,
+                "p99_latency_ms": summary.p99_latency,
+                "error_rate": summary.error_rate,
+                "sample_count": summary.sample_count,
+            }));
+        }
+    }
+    (200, json!({ "origins": data }))
+}
+
+/// GET /_admin/log/status — current log backend status.
+pub async fn get_log_status(state: &AdminState) -> (u16, Value) {
+    let config = &state.log_backend_name;
+    (
+        200,
+        json!({
+            "backend": config.as_str(),
+        }),
+    )
 }

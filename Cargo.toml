@@ -7,6 +7,7 @@ members = [
     "crates/cdn-middleware",
     "crates/cdn-image",
     "crates/cdn-streaming",
+    "crates/cdn-log",
     "crates/cdn-proxy",
 ]
 
@@ -109,6 +110,13 @@ jemallocator = "0.5"
 cdn-common = { path = "crates/cdn-common" }
 cdn-config = { path = "crates/cdn-config" }
 cdn-cache = { path = "crates/cdn-cache" }
+cdn-log = { path = "crates/cdn-log" }
 cdn-image = { path = "crates/cdn-image" }
 cdn-middleware = { path = "crates/cdn-middleware" }
 cdn-streaming = { path = "crates/cdn-streaming" }
+
+# Messaging
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
+lapin = "2"
+async-nats = "0.38"
+pulsar = { version = "6", features = ["tokio-runtime"] }

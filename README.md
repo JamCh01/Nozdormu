@@ -6,7 +6,7 @@
 
 ## 功能特性
 
-- **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制
+- **动态配置** -- 站点配置和集群共享设置存储在 etcd 中，通过 ArcSwap 热加载，零停机；启动参数通过 CLI 标志传入，环境变量可覆盖 etcd 配置实现单节点控制；**配置版本管理**（etcd Txn CAS 原子版本号，每站点最多 50 个版本快照，变更历史查询 + 一键回滚）
 - **WAF 防火墙** -- IP/CIDR 黑白名单（前缀树 O(log n)），GeoIP 国家/地区/ASN 过滤，国家白名单 fail-closed 模式，请求体检查（POST Body 大小限制 + 基于魔数字节的内容类型校验，使用 `infer` 库检测 200+ 文件类型）
 - **CC 防护（频率限制）** -- 本地+Redis 混合计数器，JS 挑战（HMAC-SHA256），按路径规则最长前缀匹配
 - **缓存** -- 双后端架构：Redis 元数据 + S3/OSS 对象存储，基于规则的 TTL（路径/扩展名/正则），Cache-Control 合规，缓存清除 API（精确 URL + 全站清除 + 按 Tag 清除），直接哈希 Key 生成（零中间分配），批量清除并发 Redis 管道；Stale-While-Revalidate（过期但在 SWR 窗口内立即返回 stale 响应，后台异步回源刷新）；Request Coalescing（同一 cache key 的并发 miss 请求排队，仅第一个回源）；Cache Tags（从 `Surrogate-Key`/`Cache-Tag` 响应头解析，Redis SET 反向索引，支持按 tag 批量清除）；缓存预热 API（`POST /_admin/cache/warm` 批量回源写入缓存）
@@ -14,16 +14,16 @@
 - **Range 请求** -- 客户端断点续传，`Accept-Ranges: bytes` 通告，`If-Range` 条件请求，Range 透传回源，OSS Range GET 内存高效的缓存分片服务；按站点启用/禁用
 - **视频流优化** -- 三大功能：
   - **边缘鉴权（URL 签名）** -- Type A/B/C 三种 URL 签名模式（HMAC-SHA256），防盗链，可配置过期时间
-  - **动态转封装** -- 源站存储 MP4，边缘实时转封装为 HLS（fMP4 分片 + m3u8 播放列表），支持 `?format=hls` 触发
+  - **动态转封装** -- 源站存储 MP4，边缘实时转封装为 HLS（fMP4 分片 + m3u8 播放列表），支持 `?format=hls` 触发；**LL-HLS（Low-Latency HLS）**：`#EXT-X-PART` 部分分片（可配置 part_duration，默认 0.5s）、`#EXT-X-PART-INF`、`#EXT-X-SERVER-CONTROL`（CAN-BLOCK-RELOAD、PART-HOLD-BACK），`INDEPENDENT=YES` 关键帧标记，per-site 可配置启用
   - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，原子去重，响应体大小限制（256MB），提升命中率
 - **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
-- **负载均衡** -- 加权轮询、IP 哈希、随机；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
+- **负载均衡** -- 加权轮询、一致性哈希（Ketama 哈希环，源站增减仅 1/N 重映射）、随机、最少连接（Least Connections）；**自适应权重**（滑动窗口 P99 延迟 + 错误率自动调权，per-site 可配置）；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
 - **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），完整 ACME v2 协议流程（HTTP-01 挑战、CSR 生成、证书下载），账户凭证 Redis 持久化，自动续期（后台服务 + Redis 分布式锁），EAB 支持；下游 TLS 监听器（动态证书选择，SNI 精确/通配符/默认回退），TLS 1.3 0-RTT Early Data（非幂等方法自动拒绝 425，上游 `Early-Data: 1` 头部 RFC 8470）
 - **重定向** -- 三层引擎：域名重定向、协议强制（HTTP/HTTPS）、URL 规则（精确/前缀/正则/域名）
 - **头部操作** -- 请求/响应头规则，支持变量替换（`${client_ip}`、`${host}`、`${cache_status}` 等）
-- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT/ACME 签发与续期/SWR 回源/请求合并/缓存预热 计数器，耗时直方图），Redis Streams 请求日志（有界通道 + 批量写入，背压保护），请求 ID 追踪，请求耗时追踪（毫秒级 Instant 计时）
+- **可观测性** -- Prometheus 指标（请求/上游/健康检查/缓存清除/图片优化/流媒体/0-RTT/ACME 签发与续期/SWR 回源/请求合并/缓存预热 计数器，耗时直方图），**多后端多通道日志**（`LogSink` trait 抽象，支持 Redis Streams / Apache Kafka / RabbitMQ / NATS + JetStream / Apache Pulsar 五种后端，8 个独立日志通道：client_to_cdn / cdn_to_origin / origin_to_cdn / cdn_to_client / waf / cc / cache / access，每个通道独立 topic/subject/routing_key/stream_key + enabled 开关），**4 阶段请求计时**（client→CDN / CDN→origin / origin→CDN / CDN→client 毫秒级分段耗时），请求 ID 追踪
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
-- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务 + 按 Tag 清除）、缓存预热（批量 URL 回源写入缓存）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
+- **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、配置版本历史查询与回滚、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务 + 按 Tag 清除）、缓存预热（批量 URL 回源写入缓存）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
 
 ## 架构
 
@@ -32,6 +32,7 @@ crates/
   cdn-common        共享类型、错误处理、RedisOps trait
   cdn-config        节点配置、GlobalConfig（etcd）、LiveConfig（ArcSwap）、etcd 监听
   cdn-cache         缓存策略、Key 生成、S3/OSS 客户端（AWS Sig v4）、批量清除
+  cdn-log           日志多后端：LogSink trait、Redis/Kafka/RabbitMQ/NATS/Pulsar 五种 sink、4 阶段计时
   cdn-image         图片优化：裁剪/缩放、格式转换、质量调整、Accept 协商
   cdn-streaming     视频流优化：URL 签名鉴权、MP4→HLS 动态转封装、HLS/DASH 智能预取
   cdn-middleware     WAF 引擎（IP/GeoIP + 请求体检查）、CC 引擎、重定向引擎、头部规则
@@ -163,6 +164,20 @@ curl -X POST http://localhost:6188/_admin/cache/warm \
 curl -H "Authorization: Bearer my_admin_bearer_token" \
   http://localhost:6188/_admin/cache/warm/status
 
+# 配置版本历史（查看站点配置变更记录）
+curl -H "Authorization: Bearer my_admin_bearer_token" \
+  http://localhost:6188/_admin/config/history/example
+# -> {"site_id":"example","versions":[{"version":3,"timestamp":"...","etcd_revision":42,"change_type":"updated"},...]}
+
+# 配置版本详情（获取某个版本的完整配置快照）
+curl -H "Authorization: Bearer my_admin_bearer_token" \
+  http://localhost:6188/_admin/config/history/example/2
+
+# 配置回滚（恢复到指定版本，自动触发热加载）
+curl -X POST -H "Authorization: Bearer my_admin_bearer_token" \
+  http://localhost:6188/_admin/config/rollback/example/2
+# -> {"status":"ok","site_id":"example","rolled_back_to":2,"new_version":4}
+
 # 图片优化（缩放 + 自动格式协商）
 curl -H "Accept: image/avif,image/webp,*/*" \
   "http://localhost:6188/photo.jpg?w=200&h=150&fit=cover&q=80" -o optimized.avif
@@ -171,6 +186,12 @@ curl -H "Accept: image/avif,image/webp,*/*" \
 curl "http://localhost:6188/video.mp4?format=hls" -o playlist.m3u8
 curl "http://localhost:6188/video.mp4?format=hls&segment=init" -o init.mp4
 curl "http://localhost:6188/video.mp4?format=hls&segment=0" -o segment0.m4s
+
+# LL-HLS 部分分片（需站点配置 ll_hls.enabled=true）
+# 播放列表自动包含 #EXT-X-PART 标签
+curl "http://localhost:6188/video.mp4?format=hls" -o ll_playlist.m3u8
+# 请求部分分片（segment=0 的第 0 个 part）
+curl "http://localhost:6188/video.mp4?format=hls&segment=0&part=0" -o part0.m4s
 
 # URL 签名鉴权（Type B 示例）
 # 签名 URL: /video.mp4?auth_key={timestamp}-{rand}-{uid}-{hmac_hash}
@@ -199,11 +220,11 @@ Nozdormu 使用三层配置系统，优先级：**CLI 参数 > etcd > 默认值*
 |----------|------|
 | `{prefix}/global/redis` | Redis 模式、哨兵、主机、端口、超时、连接池 |
 | `{prefix}/global/security` | WAF 模式、CC 默认值、信任代理、CC 挑战密钥、管理 Token |
-| `{prefix}/global/balancer` | 负载均衡算法、重试、DNS、健康检查阈值 |
+| `{prefix}/global/balancer` | 负载均衡算法、重试、DNS、健康检查阈值、自适应权重默认值 |
 | `{prefix}/global/proxy` | 连接/发送/读取/WebSocket/SSE/gRPC 超时 |
 | `{prefix}/global/cache` | OSS 端点、桶、区域、SSL、TTL、最大大小 |
 | `{prefix}/global/ssl` | ACME 环境、邮箱、提供商、续期天数 |
-| `{prefix}/global/logging` | Redis 日志推送、Stream 最大长度 |
+| `{prefix}/global/logging` | 日志后端（Redis/Kafka/RabbitMQ/NATS/Pulsar）、8 通道独立路由 |
 | `{prefix}/global/compression` | 压缩算法、级别、最小大小、MIME 类型 |
 | `{prefix}/global/image_optimization` | 图片格式、质量、最大尺寸、可优化类型 |
 
@@ -254,6 +275,12 @@ etcdctl put /nozdormu/global/redis '{
       "timeout": 5,
       "healthy_threshold": 2,
       "unhealthy_threshold": 3
+    },
+    "adaptive_weight": {
+      "enabled": false,
+      "window_size": 100,
+      "latency_threshold_ms": 500.0,
+      "error_threshold": 0.1
     }
   },
   "cache": {
@@ -297,7 +324,11 @@ etcdctl put /nozdormu/global/redis '{
     "dynamic_packaging": {
       "enabled": true,
       "segment_duration": 6.0,
-      "max_mp4_size": 2147483648
+      "max_mp4_size": 2147483648,
+      "ll_hls": {
+        "enabled": false,
+        "part_duration": 0.5
+      }
     },
     "prefetch": {
       "enabled": true,
@@ -341,7 +372,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 ## 开发
 
 ```bash
-# 运行单元/集成测试（449 个测试）
+# 运行单元/集成测试（509 个测试）
 cargo test
 
 # 代码检查

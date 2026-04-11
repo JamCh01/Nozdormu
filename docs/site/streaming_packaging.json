@@ -22,23 +22,38 @@
 
       "_max_mp4_size": "最大输入 MP4 文件大小（字节），超过则跳过转封装直接透传",
       "_max_mp4_size_note": "转封装需要将完整 MP4 缓冲到内存，此限制防止内存溢出。默认 2GB",
-      "max_mp4_size": 2147483648
+      "max_mp4_size": 2147483648,
+
+      "_ll_hls": "LL-HLS（Low-Latency HLS）配置，启用后播放列表包含 #EXT-X-PART 部分分片标签",
+      "ll_hls": {
+        "_enabled": "是否启用 LL-HLS 部分分片。启用后播放列表使用 VERSION:9，包含 EXT-X-PART、EXT-X-PART-INF、EXT-X-SERVER-CONTROL 标签",
+        "enabled": true,
+        "_part_duration": "目标部分分片时长（秒），默认 0.5s。每个完整分片被细分为多个 part，降低播放启动延迟",
+        "_part_duration_note": "较短的 part（0.2-0.5s）降低延迟，较长的 part（0.5-1.0s）减少请求数",
+        "part_duration": 0.5
+      }
     }
   },
 
   "_request_types": {
     "_manifest": "请求 m3u8 播放列表: GET /video.mp4?format=hls",
     "_manifest_accept": "或通过 Accept 头: Accept: application/vnd.apple.mpegurl",
+    "_manifest_ll_hls": "LL-HLS 启用时自动返回包含 #EXT-X-PART 的播放列表",
     "_init_segment": "请求初始化分片: GET /video.mp4?format=hls&segment=init",
     "_media_segment": "请求媒体分片: GET /video.mp4?format=hls&segment=0",
-    "_media_segment_note": "分片索引从 0 开始，总数 = ceil(视频时长 / segment_duration)"
+    "_media_segment_note": "分片索引从 0 开始，总数 = ceil(视频时长 / segment_duration)",
+    "_partial_segment": "请求部分分片（LL-HLS）: GET /video.mp4?format=hls&segment=0&part=0",
+    "_partial_segment_note": "part 索引从 0 开始，每个完整分片包含多个 part",
+    "_hls_msn": "LL-HLS 阻塞重载参数: _HLS_msn 和 _HLS_part（VOD 模式下立即响应）"
   },
 
   "_hls_output": {
-    "_playlist_format": "#EXTM3U / #EXT-X-VERSION:7 / #EXT-X-PLAYLIST-TYPE:VOD",
+    "_playlist_format": "#EXTM3U / #EXT-X-VERSION:7 (标准) 或 #EXT-X-VERSION:9 (LL-HLS) / #EXT-X-PLAYLIST-TYPE:VOD",
     "_init_segment": "fMP4 初始化分片（ftyp + moov + mvex），包含编解码器配置",
     "_media_segments": "fMP4 媒体分片（moof + mdat），包含视频/音频采样数据",
-    "_keyframe_alignment": "分片边界自动对齐到视频关键帧（IDR），确保播放器可独立解码每个分片"
+    "_partial_segments": "fMP4 部分分片（moof + mdat），包含分片内子范围的采样数据（LL-HLS）",
+    "_keyframe_alignment": "分片边界自动对齐到视频关键帧（IDR），部分分片不要求关键帧对齐",
+    "_ll_hls_tags": "LL-HLS 播放列表包含: #EXT-X-SERVER-CONTROL (CAN-BLOCK-RELOAD, PART-HOLD-BACK), #EXT-X-PART-INF (PART-TARGET), #EXT-X-PART (DURATION, URI, INDEPENDENT=YES)"
   },
 
   "_cache_strategy": {

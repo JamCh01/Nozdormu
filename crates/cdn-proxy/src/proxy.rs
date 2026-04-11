@@ -73,6 +73,8 @@ pub struct CdnProxy {
     pub admin_state: Arc<crate::admin::AdminState>,
     pub cache_storage: Arc<cdn_cache::storage::CacheStorage>,
     pub coalescing_map: Arc<dashmap::DashMap<String, Arc<CoalescingEntry>>>,
+    /// Log channel routing configuration (8 independent channels).
+    pub log_channels: cdn_log::LogChannelsConfig,
 }
 
 /// Entry for request coalescing — waiters block on `notify` until the leader completes.
@@ -656,15 +658,43 @@ impl ProxyHttp for CdnProxy {
                     // Determine what sub-resource is requested
                     let segment_param =
                         query.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("segment=")));
-                    ctx.packaging_request = Some(match segment_param {
-                        Some("init") => cdn_streaming::packaging::PackagingRequest::InitSegment,
-                        Some(n) => match n.parse::<u32>() {
+                    let part_param =
+                        query.and_then(|q| q.split('&').find_map(|p| p.strip_prefix("part=")));
+                    let ll_hls_enabled =
+                        site.streaming.dynamic_packaging.ll_hls.enabled;
+
+                    ctx.packaging_request = Some(match (segment_param, part_param) {
+                        (Some("init"), _) => {
+                            cdn_streaming::packaging::PackagingRequest::InitSegment
+                        }
+                        (Some(n), Some(p)) => {
+                            // Part request: segment=N&part=P
+                            match (n.parse::<u32>(), p.parse::<u32>()) {
+                                (Ok(seg), Ok(part)) if ll_hls_enabled => {
+                                    cdn_streaming::packaging::PackagingRequest::PartialSegment {
+                                        segment_index: seg,
+                                        part_index: part,
+                                    }
+                                }
+                                (Ok(idx), _) => {
+                                    cdn_streaming::packaging::PackagingRequest::MediaSegment(idx)
+                                }
+                                _ => cdn_streaming::packaging::PackagingRequest::Manifest,
+                            }
+                        }
+                        (Some(n), None) => match n.parse::<u32>() {
                             Ok(idx) => {
                                 cdn_streaming::packaging::PackagingRequest::MediaSegment(idx)
                             }
                             Err(_) => cdn_streaming::packaging::PackagingRequest::Manifest,
                         },
-                        None => cdn_streaming::packaging::PackagingRequest::Manifest,
+                        (None, _) => {
+                            if ll_hls_enabled {
+                                cdn_streaming::packaging::PackagingRequest::LlHlsManifest
+                            } else {
+                                cdn_streaming::packaging::PackagingRequest::Manifest
+                            }
+                        }
                     });
 
                     // Packaging wins over Range
@@ -758,12 +788,16 @@ impl ProxyHttp for CdnProxy {
         _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
+        // Mark start of upstream phase (end of request processing)
+        ctx.upstream_start = Some(std::time::Instant::now());
         // Dynamic balancer: health filter → backup fallback → LB algorithm → DNS → HttpPeer
         if let Some(ref site) = ctx.site_config {
             let (peer, origin) = self
                 .balancer
                 .select_peer(site, ctx.client_ip, &ctx.protocol_type)
                 .await?;
+            // Track active connection for least-conn balancing
+            self.balancer.conn_inc(&ctx.site_id, &origin.id);
             ctx.selected_origin = Some(origin);
             return Ok(peer);
         }
@@ -801,6 +835,8 @@ impl ProxyHttp for CdnProxy {
         upstream_request: &mut RequestHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
+        // Mark connection established (after DNS + TCP + TLS)
+        ctx.upstream_connected = Some(std::time::Instant::now());
         // Auto headers
         upstream_request
             .insert_header("X-Request-ID", &ctx.request_id)
@@ -922,8 +958,9 @@ impl ProxyHttp for CdnProxy {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
+        // Mark upstream response headers received
+        ctx.upstream_response_received = Some(std::time::Instant::now());
         // Sensitive header removal (always, not configurable)
-        upstream_response.remove_header("X-Powered-By");
         upstream_response.insert_header("Server", "CDN").ok();
 
         // Auto headers
@@ -1088,13 +1125,15 @@ impl ProxyHttp for CdnProxy {
                 if size_ok {
                     ctx.packaging_buffering = true;
                     match &ctx.packaging_request {
-                        Some(cdn_streaming::packaging::PackagingRequest::Manifest) => {
+                        Some(cdn_streaming::packaging::PackagingRequest::Manifest)
+                        | Some(cdn_streaming::packaging::PackagingRequest::LlHlsManifest) => {
                             upstream_response
                                 .insert_header("Content-Type", "application/vnd.apple.mpegurl")
                                 .ok();
                         }
                         Some(cdn_streaming::packaging::PackagingRequest::InitSegment)
-                        | Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
+                        | Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_))
+                        | Some(cdn_streaming::packaging::PackagingRequest::PartialSegment { .. }) => {
                             upstream_response
                                 .insert_header("Content-Type", "video/mp4")
                                 .ok();
@@ -1411,12 +1450,18 @@ impl ProxyHttp for CdnProxy {
                     .unwrap_or(6.0);
 
                 let start = std::time::Instant::now();
+                let ll_hls_config = ctx
+                    .site_config
+                    .as_ref()
+                    .filter(|s| s.streaming.dynamic_packaging.ll_hls.enabled)
+                    .map(|s| &s.streaming.dynamic_packaging.ll_hls);
                 match cdn_streaming::packaging::process_packaging_request(
                     &mp4_data,
                     ctx.packaging_request.as_ref().unwrap(),
                     segment_duration,
                     &ctx.uri,
                     _session.req_header().uri.query(),
+                    ll_hls_config,
                 ) {
                     Ok(output) => {
                         let elapsed = start.elapsed().as_secs_f64();
@@ -1424,9 +1469,15 @@ impl ProxyHttp for CdnProxy {
                             Some(cdn_streaming::packaging::PackagingRequest::Manifest) => {
                                 "manifest"
                             }
+                            Some(cdn_streaming::packaging::PackagingRequest::LlHlsManifest) => {
+                                "ll_manifest"
+                            }
                             Some(cdn_streaming::packaging::PackagingRequest::InitSegment) => "init",
                             Some(cdn_streaming::packaging::PackagingRequest::MediaSegment(_)) => {
                                 "segment"
+                            }
+                            Some(cdn_streaming::packaging::PackagingRequest::PartialSegment { .. }) => {
+                                "part"
                             }
                             None => "unknown",
                         };
@@ -1647,7 +1698,7 @@ impl ProxyHttp for CdnProxy {
             ctx.protocol_type,
         );
 
-        // Passive health check
+        // Passive health check + connection tracking + adaptive weight
         if let Some(ref origin) = ctx.selected_origin {
             if status >= 500 || status == 0 {
                 self.balancer
@@ -1658,6 +1709,24 @@ impl ProxyHttp for CdnProxy {
                     .health
                     .record_success(&ctx.site_id, &origin.id);
             }
+            // Decrement active connection count for least-conn balancing
+            self.balancer.conn_dec(&ctx.site_id, &origin.id);
+            // Record response stats for adaptive weight adjustment
+            let latency_ms =
+                ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+            let is_error = status >= 500 || status == 0;
+            let window_size = ctx
+                .site_config
+                .as_ref()
+                .map(|s| s.load_balancer.adaptive_weight.window_size)
+                .unwrap_or(100);
+            self.balancer.record_response(
+                &ctx.site_id,
+                &origin.id,
+                latency_ms,
+                is_error,
+                window_size,
+            );
         }
 
         // Prometheus metrics
@@ -1683,8 +1752,10 @@ impl ProxyHttp for CdnProxy {
             ctx.selected_origin.as_ref().map(|o| o.id.as_str()),
         );
 
-        // Async log push
-        crate::logging::queue::push_log_entry(crate::logging::queue::LogEntry {
+        // Async log push — compute 4-phase timing breakdown and route to 8 channels
+        let (client_to_cdn_ms, cdn_to_origin_ms, origin_to_cdn_ms, cdn_to_client_ms) =
+            compute_phase_timings(ctx);
+        let entry = cdn_log::LogEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             request_id: ctx.request_id.clone(),
             method: method.to_string(),
@@ -1714,7 +1785,12 @@ impl ProxyHttp for CdnProxy {
             body_rejected: ctx.body_rejected,
             early_data: ctx.is_early_data,
             node_id: self.node_id.to_string(),
-        });
+            client_to_cdn_ms,
+            cdn_to_origin_ms,
+            origin_to_cdn_ms,
+            cdn_to_client_ms,
+        };
+        cdn_log::push_log(&self.log_channels, &entry);
     }
 
     fn fail_to_connect(
@@ -1876,6 +1952,75 @@ impl CdnProxy {
             }
             ("GET", "/cache/warm/status") => {
                 crate::admin::endpoints::warm_list_tasks(&self.admin_state).await
+            }
+            // Config version history — list or detail
+            ("GET", p) if p.starts_with("/config/history/") => {
+                let rest = &p[16..]; // strip "/config/history/"
+                match rest.split_once('/') {
+                    Some((site_id, ver_str)) if !site_id.is_empty() => {
+                        match ver_str.parse::<u64>() {
+                            Ok(version) => {
+                                crate::admin::endpoints::config_version_detail(
+                                    &self.admin_state,
+                                    site_id,
+                                    version,
+                                )
+                                .await
+                            }
+                            Err(_) => (
+                                400,
+                                serde_json::json!({"status": "error", "message": "invalid version number"}),
+                            ),
+                        }
+                    }
+                    None if !rest.is_empty() => {
+                        // /config/history/{site_id} — list versions
+                        crate::admin::endpoints::config_history(&self.admin_state, rest)
+                            .await
+                    }
+                    _ => (
+                        400,
+                        serde_json::json!({"status": "error", "message": "invalid path"}),
+                    ),
+                }
+            }
+            // Config rollback
+            ("POST", p) if p.starts_with("/config/rollback/") => {
+                let rest = &p[17..]; // strip "/config/rollback/"
+                match rest.split_once('/') {
+                    Some((site_id, ver_str))
+                        if !site_id.is_empty() && !ver_str.is_empty() =>
+                    {
+                        match ver_str.parse::<u64>() {
+                            Ok(version) => {
+                                crate::admin::endpoints::config_rollback(
+                                    &self.admin_state,
+                                    site_id,
+                                    version,
+                                )
+                                .await
+                            }
+                            Err(_) => (
+                                400,
+                                serde_json::json!({"status": "error", "message": "invalid version number"}),
+                            ),
+                        }
+                    }
+                    _ => (
+                        400,
+                        serde_json::json!({"status": "error", "message": "expected /config/rollback/{site_id}/{version}"}),
+                    ),
+                }
+            }
+            // Adaptive weight status
+            ("GET", "/adaptive/weights") => {
+                crate::admin::endpoints::get_adaptive_weights(
+                    &self.admin_state,
+                )
+                .await
+            }
+            ("GET", "/log/status") => {
+                crate::admin::endpoints::get_log_status(&self.admin_state).await
             }
             _ => (
                 404,
@@ -2409,3 +2554,52 @@ macro_rules! impl_apply_header_op {
 
 impl_apply_header_op!(apply_header_op, RequestHeader);
 impl_apply_header_op!(apply_header_op_response, ResponseHeader);
+
+/// Compute 4-phase timing breakdown from ProxyCtx timing markers.
+///
+/// Phases:
+/// 1. client_to_cdn_ms: request received → upstream connect start (WAF, CC, cache, routing)
+/// 2. cdn_to_origin_ms: upstream connect start → connection established (DNS + TCP + TLS)
+/// 3. origin_to_cdn_ms: request sent → response headers received (origin processing + TTFB)
+/// 4. cdn_to_client_ms: response headers received → response fully sent
+///
+/// Returns `None` for all phases when the request short-circuits (cache hit, WAF block, etc.).
+fn compute_phase_timings(
+    ctx: &crate::context::ProxyCtx,
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let start = ctx.start_time;
+    match (
+        ctx.upstream_start,
+        ctx.upstream_connected,
+        ctx.upstream_response_received,
+    ) {
+        (Some(us), Some(uc), Some(ur)) => {
+            let total = start.elapsed();
+            (
+                Some(us.duration_since(start).as_secs_f64() * 1000.0),
+                Some(uc.duration_since(us).as_secs_f64() * 1000.0),
+                Some(ur.duration_since(uc).as_secs_f64() * 1000.0),
+                Some((total - ur.duration_since(start)).as_secs_f64() * 1000.0),
+            )
+        }
+        (Some(us), Some(uc), None) => {
+            // Connected but no response yet (upstream timeout/error)
+            (
+                Some(us.duration_since(start).as_secs_f64() * 1000.0),
+                Some(uc.duration_since(us).as_secs_f64() * 1000.0),
+                None,
+                None,
+            )
+        }
+        (Some(us), None, None) => {
+            // Upstream started but connection failed
+            (
+                Some(us.duration_since(start).as_secs_f64() * 1000.0),
+                None,
+                None,
+                None,
+            )
+        }
+        _ => (None, None, None, None), // Cache hit, WAF block, etc.
+    }
+}

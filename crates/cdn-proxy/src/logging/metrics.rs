@@ -312,6 +312,18 @@ pub static CACHE_WARM_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     .unwrap()
 });
 
+// ── Adaptive Weight ──
+
+pub static ADAPTIVE_WEIGHT_EFFECTIVE: Lazy<prometheus::GaugeVec> =
+    Lazy::new(|| {
+        prometheus::register_gauge_vec!(
+            "cdn_adaptive_weight_effective",
+            "Current effective weight for origin (after adaptive adjustment)",
+            &["site_id", "origin_id"]
+        )
+        .unwrap()
+    });
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

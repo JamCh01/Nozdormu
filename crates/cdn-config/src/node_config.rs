@@ -1073,6 +1073,8 @@ pub struct LogConfig {
     pub level: String,
     pub push_to_redis: bool,
     pub stream_max_len: u64,
+    /// Log backend configuration (new-style). Takes priority over `push_to_redis`.
+    pub backend: Option<cdn_log::LogBackendConfig>,
 }
 
 impl Default for LogConfig {
@@ -1081,6 +1083,7 @@ impl Default for LogConfig {
             level: "info".to_string(),
             push_to_redis: true,
             stream_max_len: 100_000,
+            backend: None,
         }
     }
 }
@@ -1091,6 +1094,7 @@ impl LogConfig {
             level: env_or("CDN_LOG_LEVEL", "info"),
             push_to_redis: env_bool("CDN_LOG_PUSH_REDIS", true),
             stream_max_len: env_u64("CDN_LOG_STREAM_MAX_LEN", 100_000),
+            backend: None,
         }
     }
 
@@ -1113,6 +1117,8 @@ impl LogConfig {
             } else {
                 d.stream_max_len
             },
+            // backend comes from etcd global config only (no env override)
+            backend: d.backend,
         }
     }
 }

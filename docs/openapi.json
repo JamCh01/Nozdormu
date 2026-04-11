@@ -3,7 +3,7 @@
   "info": {
     "title": "Nozdormu CDN Admin API",
     "description": "Management API for the Nozdormu CDN reverse proxy. All endpoints are served on the proxy port under the `/_admin/` prefix and require Bearer token authentication configured via etcd `{prefix}/global/security`.",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "contact": {
       "name": "Nozdormu CDN"
     }
@@ -535,9 +535,160 @@
           "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
+    },
+    "/config/history/{site_id}": {
+      "get": {
+        "operationId": "listConfigVersions",
+        "summary": "List config version history",
+        "description": "Returns version history for a site configuration, newest first. Each entry includes version number, timestamp, etcd revision, and change type.",
+        "tags": ["Config"],
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "site_id": { "type": "string" },
+                    "versions": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/ConfigVersionSummary" }
+                    }
+                  },
+                  "required": ["site_id", "versions"]
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid site_id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "description": "etcd error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/config/history/{site_id}/{version}": {
+      "get": {
+        "operationId": "getConfigVersion",
+        "summary": "Get config version detail",
+        "description": "Returns a specific version snapshot including the full site configuration body.",
+        "tags": ["Config"],
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site identifier"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer", "format": "uint64", "minimum": 1 },
+            "description": "Version number"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version snapshot",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConfigVersionSnapshot" }
+              }
+            }
+          },
+          "400": { "description": "Invalid parameters", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "Version not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "etcd error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/config/rollback/{site_id}/{version}": {
+      "post": {
+        "operationId": "rollbackConfig",
+        "summary": "Rollback site config to a previous version",
+        "description": "Reads a historical version snapshot and writes its config back to the live site key in etcd. The normal etcd watch mechanism detects the change and updates the running proxy. A new version snapshot with change_type 'rollback' is created.",
+        "tags": ["Config"],
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site identifier"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer", "format": "uint64", "minimum": 1 },
+            "description": "Version number to rollback to"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rollback successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "message": { "type": "string" },
+                    "site_id": { "type": "string" },
+                    "rolled_back_to": { "type": "integer", "format": "uint64" },
+                    "new_version": { "type": "integer", "format": "uint64" }
+                  },
+                  "required": ["status", "message", "site_id", "rolled_back_to", "new_version"]
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid parameters", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "Version not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Rollback failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/log/status": {
+      "get": {
+        "operationId": "getLogStatus",
+        "summary": "Get current log backend status",
+        "description": "Returns the active log backend type and configuration summary.",
+        "tags": ["Logging"],
+        "responses": {
+          "200": {
+            "description": "Log backend status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "backend": { "type": "string", "description": "Active backend type (redis, kafka, rabbitmq, nats, pulsar, disabled)" },
+                    "config": { "type": "object", "description": "Backend-specific configuration summary (sensitive fields redacted)" }
+                  },
+                  "required": ["backend"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
     }
   },
-  "components": {
     "securitySchemes": {
       "BearerAuth": {
         "type": "http",
@@ -686,6 +837,36 @@
           "error": { "type": ["string", "null"], "description": "Error message, omitted when null" }
         },
         "required": ["task_id", "site_id", "status", "urls_total", "urls_completed", "urls_failed", "started_at"]
+      },
+      "ConfigChangeType": {
+        "type": "string",
+        "enum": ["created", "updated", "deleted", "rollback"],
+        "description": "The type of change that produced this config version"
+      },
+      "ConfigVersionSummary": {
+        "type": "object",
+        "description": "Summary of a config version (without the full config body)",
+        "properties": {
+          "version": { "type": "integer", "format": "uint64", "minimum": 1 },
+          "site_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time", "description": "RFC 3339 UTC timestamp" },
+          "etcd_revision": { "type": "integer", "format": "int64" },
+          "change_type": { "$ref": "#/components/schemas/ConfigChangeType" }
+        },
+        "required": ["version", "site_id", "timestamp", "etcd_revision", "change_type"]
+      },
+      "ConfigVersionSnapshot": {
+        "type": "object",
+        "description": "Full versioned snapshot of a site config, including the config body",
+        "properties": {
+          "version": { "type": "integer", "format": "uint64", "minimum": 1 },
+          "site_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time", "description": "RFC 3339 UTC timestamp" },
+          "etcd_revision": { "type": "integer", "format": "int64" },
+          "change_type": { "$ref": "#/components/schemas/ConfigChangeType" },
+          "config": { "type": "object", "description": "The full SiteConfig JSON at this version" }
+        },
+        "required": ["version", "site_id", "timestamp", "etcd_revision", "change_type", "config"]
       }
     }
   },

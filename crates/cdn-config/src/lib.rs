@@ -1,3 +1,4 @@
+pub mod config_history;
 pub mod etcd_watcher;
 pub mod global_config;
 pub mod live_config;

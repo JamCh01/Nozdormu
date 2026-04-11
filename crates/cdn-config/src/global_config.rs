@@ -23,12 +23,18 @@ pub struct GlobalConfig {
 /// Subset of logging config that is cluster-shared.
 ///
 /// `level` stays env-only because the logger is initialized before etcd is available.
+/// When `backend` is set, it takes priority over the legacy `push_to_redis` flag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingGlobalConfig {
+    /// DEPRECATED: use `backend` instead. Kept for backward compatibility.
     #[serde(default = "default_push_to_redis")]
     pub push_to_redis: bool,
+    /// DEPRECATED: use `backend.max_len` instead. Kept for backward compatibility.
     #[serde(default = "default_stream_max_len")]
     pub stream_max_len: u64,
+    /// Log backend configuration. When set, overrides `push_to_redis`.
+    #[serde(default)]
+    pub backend: Option<cdn_log::LogBackendConfig>,
 }
 
 fn default_push_to_redis() -> bool {
@@ -44,6 +50,7 @@ impl Default for LoggingGlobalConfig {
         Self {
             push_to_redis: default_push_to_redis(),
             stream_max_len: default_stream_max_len(),
+            backend: None,
         }
     }
 }

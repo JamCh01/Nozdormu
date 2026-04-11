@@ -25,6 +25,12 @@ fn generate_request_id() -> String {
 pub struct ProxyCtx {
     // === Timing ===
     pub start_time: std::time::Instant,
+    /// Set at start of upstream_peer() — marks end of request processing phase.
+    pub upstream_start: Option<std::time::Instant>,
+    /// Set at start of upstream_request_filter() — marks connection established.
+    pub upstream_connected: Option<std::time::Instant>,
+    /// Set at start of response_filter() — marks upstream response headers received.
+    pub upstream_response_received: Option<std::time::Instant>,
 
     // === Set in request_filter (access phase) ===
     pub client_ip: Option<IpAddr>,
@@ -117,6 +123,9 @@ impl Default for ProxyCtx {
     fn default() -> Self {
         Self {
             start_time: std::time::Instant::now(),
+            upstream_start: None,
+            upstream_connected: None,
+            upstream_response_received: None,
             client_ip: None,
             site_config: None,
             site_id: String::new(),

@@ -1,3 +1,4 @@
+use crate::config_history::ConfigChangeType;
 use crate::global_config::GlobalConfig;
 use crate::live_config::{filter_sites_by_labels, LiveConfig};
 use crate::node_config::EtcdConfig;
@@ -5,7 +6,7 @@ use arc_swap::ArcSwap;
 use cdn_common::SiteConfig;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Manages loading and watching site configurations from etcd.
 pub struct EtcdConfigManager {
@@ -13,6 +14,9 @@ pub struct EtcdConfigManager {
     node_labels: HashSet<String>,
     live: Arc<ArcSwap<LiveConfig>>,
     last_revision: AtomicI64,
+    /// Pending change types set by rollback API. Keyed by (site_id, etcd_revision).
+    /// The watcher checks this map to tag watch events as Rollback instead of Updated.
+    pending_change_types: Mutex<HashMap<(String, i64), ConfigChangeType>>,
 }
 
 impl EtcdConfigManager {
@@ -26,12 +30,32 @@ impl EtcdConfigManager {
             node_labels,
             live,
             last_revision: AtomicI64::new(0),
+            pending_change_types: Mutex::new(HashMap::new()),
         }
     }
 
     /// Returns a handle to the live config for use in the proxy.
     pub fn live_config(&self) -> Arc<ArcSwap<LiveConfig>> {
         Arc::clone(&self.live)
+    }
+
+    /// Borrow the etcd configuration (used by config_history for connecting).
+    pub fn etcd_config(&self) -> &EtcdConfig {
+        &self.config
+    }
+
+    /// Set a pending change type for a specific (site_id, revision) pair.
+    /// Called by the rollback API before writing to etcd, so the watcher
+    /// can tag the resulting watch event as Rollback instead of Updated.
+    pub fn set_pending_change_type(
+        &self,
+        site_id: String,
+        revision: i64,
+        change_type: ConfigChangeType,
+    ) {
+        if let Ok(mut map) = self.pending_change_types.lock() {
+            map.insert((site_id, revision), change_type);
+        }
     }
 
     /// Full load: GET all sites from etcd, filter by labels, build indexes.
@@ -197,8 +221,39 @@ impl EtcdConfigManager {
                                 }
                                 log::info!("[rev={}] site '{}' updated", rev, site_id);
                                 site.warn_invalid();
-                                sites.insert(site_id, Arc::new(site));
+                                sites.insert(site_id.clone(), Arc::new(site));
                                 changed = true;
+
+                                // Fire-and-forget version snapshot
+                                let change_type = self
+                                    .pending_change_types
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut m| m.remove(&(site_id.clone(), rev)))
+                                    .unwrap_or_else(|| {
+                                        if current.sites.contains_key(&site_id) {
+                                            ConfigChangeType::Updated
+                                        } else {
+                                            ConfigChangeType::Created
+                                        }
+                                    });
+                                let cfg = self.config.clone();
+                                let sid = site_id.clone();
+                                let raw = kv.value().to_vec();
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        crate::config_history::save_version(
+                                            &cfg, &sid, &raw, rev, change_type,
+                                        )
+                                        .await
+                                    {
+                                        log::warn!(
+                                            "[config_history] failed to save version for '{}': {}",
+                                            sid,
+                                            e
+                                        );
+                                    }
+                                });
                             }
                             Err(e) => {
                                 log::warn!("failed to parse site '{}': {}", site_id, e);
@@ -209,6 +264,27 @@ impl EtcdConfigManager {
                         log::info!("[rev={}] site '{}' deleted", rev, site_id);
                         sites.remove(&site_id);
                         changed = true;
+
+                        // Fire-and-forget version snapshot for deletion
+                        let cfg = self.config.clone();
+                        let sid = site_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = crate::config_history::save_version(
+                                &cfg,
+                                &sid,
+                                b"{}",
+                                rev,
+                                ConfigChangeType::Deleted,
+                            )
+                            .await
+                            {
+                                log::warn!(
+                                    "[config_history] failed to save delete version for '{}': {}",
+                                    sid,
+                                    e
+                                );
+                            }
+                        });
                     }
                 }
             }

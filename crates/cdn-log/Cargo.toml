@@ -1,0 +1,29 @@
+[package]
+name = "cdn-log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["redis-sink"]
+redis-sink = ["redis"]
+kafka-sink = ["rdkafka"]
+rabbitmq-sink = ["lapin"]
+nats-sink = ["async-nats"]
+pulsar-sink = ["pulsar"]
+
+[dependencies]
+async-trait = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+
+# Optional per-backend
+redis = { workspace = true, optional = true }
+rdkafka = { workspace = true, optional = true }
+lapin = { workspace = true, optional = true }
+async-nats = { workspace = true, optional = true }
+pulsar = { workspace = true, optional = true }

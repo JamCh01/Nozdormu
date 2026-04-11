@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 cdn-common = { workspace = true }
+cdn-log = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 serde_json = { workspace = true }
@@ -14,4 +15,5 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 etcd-client = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
 ipnet = { workspace = true }

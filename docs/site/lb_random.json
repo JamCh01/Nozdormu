@@ -14,6 +14,13 @@
   ],
   "load_balancer": {
     "algorithm": "random",
-    "retries": 3
+    "retries": 3,
+    "_adaptive_weight": "自适应权重同样适用于 random，高延迟/高错误率的源站被选中概率降低",
+    "adaptive_weight": {
+      "enabled": false,
+      "window_size": 100,
+      "latency_threshold_ms": 500.0,
+      "error_threshold": 0.1
+    }
   }
 }

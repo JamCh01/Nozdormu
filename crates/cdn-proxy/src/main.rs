@@ -14,7 +14,6 @@ use cdn_proxy::balancer::DynamicBalancer;
 use cdn_proxy::dns::DnsResolver;
 use cdn_proxy::health::HealthChecker;
 use cdn_proxy::health_probe::ActiveHealthCheckService;
-use cdn_proxy::logging::queue::init_log_queue;
 use cdn_proxy::proxy::CdnProxy;
 use cdn_proxy::ssl::challenge::ChallengeStore;
 use cdn_proxy::ssl::acme::AcmeClient;
@@ -156,8 +155,26 @@ fn main() {
     let redis_pool = Arc::new(rt.block_on(RedisPool::connect(&node_config)));
     log::info!("[Init] Redis: {}", redis_pool.describe());
 
-    // Initialize log queue with Redis pool
-    init_log_queue(Arc::clone(&redis_pool));
+    // Initialize log queue with configured backend
+    let log_backend_name = if let Some(ref backend) = node_config.log.backend {
+        match backend {
+            cdn_log::LogBackendConfig::Redis(_) => "redis",
+            cdn_log::LogBackendConfig::Kafka(_) => "kafka",
+            cdn_log::LogBackendConfig::RabbitMQ(_) => "rabbitmq",
+            cdn_log::LogBackendConfig::Nats(_) => "nats",
+            cdn_log::LogBackendConfig::Pulsar(_) => "pulsar",
+        }
+        .to_string()
+    } else if node_config.log.push_to_redis {
+        "redis".to_string()
+    } else {
+        "disabled".to_string()
+    };
+    if let Some(sink) = build_log_sink(&node_config, &redis_pool) {
+        cdn_log::init_log_queue(sink);
+    } else {
+        log::info!("[Init] Log queue disabled (no backend configured)");
+    }
 
     // Load initial config from etcd
     let etcd_manager = Arc::new(cdn_config::EtcdConfigManager::new(
@@ -273,6 +290,7 @@ fn main() {
         redis_pool: Arc::clone(&redis_pool),
         purge_tracker: Arc::clone(&purge_tracker),
         warm_tracker: Arc::new(cdn_proxy::admin::warm::WarmTaskTracker::new()),
+        log_backend_name,
     });
 
     // Active health check probes (clone refs before CdnProxy takes ownership)
@@ -336,6 +354,12 @@ fn main() {
         admin_state: Arc::clone(&admin_state),
         cache_storage: Arc::clone(&cache_storage),
         coalescing_map: Arc::new(dashmap::DashMap::new()),
+        log_channels: node_config
+            .log
+            .backend
+            .as_ref()
+            .map(|b| b.channels().clone())
+            .unwrap_or_default(),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);
@@ -451,5 +475,95 @@ impl BackgroundService for RenewalBgService {
                 }
             }
         }
+    }
+}
+
+/// Build a log sink from the node configuration.
+///
+/// Priority: `backend` field (new-style) > `push_to_redis` (legacy).
+/// Returns `None` when logging is disabled.
+fn build_log_sink(
+    config: &NodeConfig,
+    redis_pool: &Arc<RedisPool>,
+) -> Option<Box<dyn cdn_log::LogSink>> {
+    // New-style backend config takes priority
+    if let Some(ref backend) = config.log.backend {
+        return Some(match backend {
+            cdn_log::LogBackendConfig::Redis(cfg) => {
+                log::info!(
+                    "[Init] Log backend: Redis Streams (max_len={})",
+                    cfg.max_len
+                );
+                Box::new(cdn_log::sink::redis::RedisStreamSink::new(
+                    Arc::clone(redis_pool) as Arc<dyn cdn_log::sink::redis::RedisStreamOps>,
+                    cfg.max_len,
+                ))
+            }
+            #[cfg(feature = "kafka-sink")]
+            cdn_log::LogBackendConfig::Kafka(cfg) => {
+                log::info!(
+                    "[Init] Log backend: Kafka (brokers={:?})",
+                    cfg.brokers
+                );
+                Box::new(
+                    cdn_log::sink::kafka::KafkaSink::new(cfg)
+                        .expect("Kafka sink initialization failed"),
+                )
+            }
+            #[cfg(feature = "rabbitmq-sink")]
+            cdn_log::LogBackendConfig::RabbitMQ(cfg) => {
+                log::info!(
+                    "[Init] Log backend: RabbitMQ (exchange={})",
+                    cfg.exchange
+                );
+                Box::new(cdn_log::sink::rabbitmq::RabbitMQSink::new(cfg.clone()))
+            }
+            #[cfg(feature = "nats-sink")]
+            cdn_log::LogBackendConfig::Nats(cfg) => {
+                log::info!(
+                    "[Init] Log backend: NATS (jetstream={})",
+                    cfg.stream_name.is_some()
+                );
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to create NATS init runtime");
+                Box::new(
+                    rt.block_on(cdn_log::sink::nats::NatsSink::new(cfg))
+                        .expect("NATS sink initialization failed"),
+                )
+            }
+            #[cfg(feature = "pulsar-sink")]
+            cdn_log::LogBackendConfig::Pulsar(cfg) => {
+                log::info!("[Init] Log backend: Pulsar");
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to create Pulsar init runtime");
+                Box::new(
+                    rt.block_on(cdn_log::sink::pulsar::PulsarSink::new(cfg))
+                        .expect("Pulsar sink initialization failed"),
+                )
+            }
+            #[allow(unreachable_patterns)]
+            _ => {
+                log::error!(
+                    "[Init] Log backend {:?} not compiled in — enable the corresponding feature flag",
+                    backend
+                );
+                return None;
+            }
+        });
+    }
+
+    // Legacy: push_to_redis
+    if config.log.push_to_redis {
+        log::info!("[Init] Log backend: Redis Streams (legacy mode)");
+        Some(Box::new(cdn_log::sink::redis::RedisStreamSink::new(
+            Arc::clone(redis_pool) as Arc<dyn cdn_log::sink::redis::RedisStreamOps>,
+            config.log.stream_max_len,
+        )))
+    } else {
+        None
     }
 }

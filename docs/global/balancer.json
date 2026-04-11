@@ -1,7 +1,7 @@
 {
   "_doc": "etcd key: {prefix}/global/balancer",
 
-  "_default_algorithm": "round_robin | ip_hash | random — 站点未指定时使用此默认值",
+  "_default_algorithm": "round_robin | ip_hash | random | least_conn — 站点未指定时使用此默认值",
   "default_algorithm": "round_robin",
 
   "_default_retries": "上游请求失败后的重试次数（0-10）",
@@ -20,5 +20,18 @@
   "healthy_threshold": 2,
 
   "_unhealthy_threshold": "连续失败多少次后标记为不健康",
-  "unhealthy_threshold": 3
+  "unhealthy_threshold": 3,
+
+  "_adaptive_weight": "全局自适应权重默认值 — 站点级 adaptive_weight 可覆盖",
+  "_adaptive_weight_desc": "基于滑动窗口内的 P99 延迟和错误率自动调整源站有效权重，惩罚因子范围 [0.1, 1.0]，所有 4 种 LB 算法均使用 effective_weight",
+  "adaptive_weight": {
+    "_enabled": "默认关闭，需在站点级配置中显式启用",
+    "enabled": false,
+    "_window_size": "滑动窗口采样数，默认 100",
+    "window_size": 100,
+    "_latency_threshold_ms": "P99 延迟阈值（毫秒），超过后开始线性惩罚",
+    "latency_threshold_ms": 500.0,
+    "_error_threshold": "错误率阈值（0.0-1.0），超过后开始线性惩罚",
+    "error_threshold": 0.1
+  }
 }

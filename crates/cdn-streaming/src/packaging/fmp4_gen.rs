@@ -378,7 +378,7 @@ fn build_mfhd(sequence_number: u32) -> Vec<u8> {
 }
 
 /// Calculate the sample range for a segment.
-fn segment_sample_range(
+pub fn segment_sample_range(
     track: &TrackInfo,
     segment_index: u32,
     segment_duration: f64,
@@ -448,6 +448,19 @@ fn build_traf_with_offset(
     data_offset: u32,
 ) -> Result<(Vec<u8>, Vec<u8>), PackagingError> {
     let (start_sample, end_sample) = segment_sample_range(track, segment_index, segment_duration);
+    build_traf_for_sample_range(mp4_data, track, start_sample, end_sample, data_offset)
+}
+
+/// Build traf + mdat payload for an arbitrary sample range.
+///
+/// Shared helper used by both full segment and partial segment generation.
+fn build_traf_for_sample_range(
+    mp4_data: &[u8],
+    track: &TrackInfo,
+    start_sample: u32,
+    end_sample: u32,
+    data_offset: u32,
+) -> Result<(Vec<u8>, Vec<u8>), PackagingError> {
     let sample_count = end_sample.saturating_sub(start_sample);
 
     if sample_count == 0 {
@@ -604,6 +617,121 @@ fn get_cts_offset(ctts: &Option<Vec<mp4_parse::CttsEntry>>, sample_index: u32) -
             0
         }
     }
+}
+
+// ── LL-HLS partial segment generation ──
+
+/// Calculate the sample range for a specific part within a segment.
+///
+/// Parts subdivide a segment by `part_duration`. Unlike full segments,
+/// parts do NOT need to start on keyframes — only full segments require
+/// keyframe alignment.
+pub fn part_sample_range(
+    track: &TrackInfo,
+    segment_index: u32,
+    part_index: u32,
+    segment_duration: f64,
+    part_duration: f64,
+) -> (u32, u32) {
+    let (seg_start, seg_end) = segment_sample_range(track, segment_index, segment_duration);
+    if seg_start >= seg_end {
+        return (seg_start, seg_start);
+    }
+
+    let mut current_sample = seg_start;
+    for p in 0..=part_index {
+        if current_sample >= seg_end {
+            return (seg_end, seg_end);
+        }
+        let current_dts =
+            mp4_parse::sample_to_dts(&track.sample_table.stts, current_sample);
+        let target_end_dts =
+            current_dts + (part_duration * track.timescale as f64) as u64;
+
+        let mut end_sample =
+            mp4_parse::dts_to_sample(&track.sample_table.stts, target_end_dts);
+        // Ensure at least one sample per part
+        if end_sample <= current_sample {
+            end_sample = current_sample + 1;
+        }
+        if end_sample > seg_end {
+            end_sample = seg_end;
+        }
+
+        if p == part_index {
+            return (current_sample, end_sample);
+        }
+        current_sample = end_sample;
+    }
+    (seg_end, seg_end)
+}
+
+/// Generate an fMP4 partial segment (moof + mdat) for a specific part
+/// within a segment. Used for LL-HLS `#EXT-X-PART` delivery.
+///
+/// Each part is a standalone fMP4 fragment containing a subset of the
+/// segment's samples, sharing the same init segment as full segments.
+pub fn generate_partial_segment(
+    mp4_data: &[u8],
+    metadata: &Mp4Metadata,
+    segment_index: u32,
+    part_index: u32,
+    segment_duration: f64,
+    part_duration: f64,
+) -> Result<Vec<u8>, PackagingError> {
+    // Sequence number encodes both segment and part for uniqueness
+    let sequence_number = segment_index * 1000 + part_index + 1;
+
+    let mut moof_content = Vec::new();
+    let mut mdat_payload = Vec::new();
+
+    let mfhd = build_mfhd(sequence_number);
+    moof_content.extend_from_slice(&mfhd);
+
+    // First pass: build traf per track with placeholder offset, collect mdat
+    for track in &metadata.tracks {
+        let (ps, pe) = part_sample_range(
+            track, segment_index, part_index, segment_duration, part_duration,
+        );
+        let (traf, track_mdat) =
+            build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
+        moof_content.extend_from_slice(&traf);
+        mdat_payload.extend_from_slice(&track_mdat);
+    }
+
+    // Calculate moof size for correct data_offset
+    let moof = make_box(b"moof", &moof_content);
+    let moof_size = moof.len() as u32;
+
+    // Second pass: rebuild with correct data_offset
+    let mut final_moof_content = Vec::new();
+    final_moof_content.extend_from_slice(&build_mfhd(sequence_number));
+
+    let mut track_data_offset = 0u32;
+    for track in &metadata.tracks {
+        let (ps, pe) = part_sample_range(
+            track, segment_index, part_index, segment_duration, part_duration,
+        );
+        let (traf, _) = build_traf_for_sample_range(
+            mp4_data,
+            track,
+            ps,
+            pe,
+            moof_size + 8 + track_data_offset,
+        )?;
+        let (_, track_mdat) =
+            build_traf_for_sample_range(mp4_data, track, ps, pe, 0)?;
+        track_data_offset += track_mdat.len() as u32;
+        final_moof_content.extend_from_slice(&traf);
+    }
+
+    let final_moof = make_box(b"moof", &final_moof_content);
+    let mdat = make_box(b"mdat", &mdat_payload);
+
+    let mut output = Vec::with_capacity(final_moof.len() + mdat.len());
+    output.extend_from_slice(&final_moof);
+    output.extend_from_slice(&mdat);
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -771,5 +899,74 @@ mod tests {
 
         let result = generate_media_segment(&[], &metadata, 0, 6.0);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_generate_partial_segment() {
+        let metadata = make_test_metadata();
+        let mp4_data = vec![0xABu8; 400000];
+
+        let part =
+            generate_partial_segment(&mp4_data, &metadata, 0, 0, 6.0, 0.5).unwrap();
+
+        assert!(part.windows(4).any(|w| w == b"moof"));
+        assert!(part.windows(4).any(|w| w == b"mdat"));
+        assert!(part.windows(4).any(|w| w == b"trun"));
+        // Part should be smaller than full segment
+        let full_segment = generate_media_segment(&mp4_data, &metadata, 0, 6.0).unwrap();
+        assert!(part.len() < full_segment.len());
+    }
+
+    #[test]
+    fn test_part_sample_range_covers_segment() {
+        let metadata = make_test_metadata();
+        let track = &metadata.tracks[0];
+        let (seg_start, seg_end) = segment_sample_range(track, 0, 6.0);
+
+        // Collect all part ranges and verify they tile the segment
+        let mut current = seg_start;
+        let mut part_idx = 0u32;
+        loop {
+            let (ps, pe) = part_sample_range(track, 0, part_idx, 6.0, 0.5);
+            if ps >= seg_end {
+                break;
+            }
+            assert_eq!(ps, current);
+            assert!(pe > ps);
+            current = pe;
+            part_idx += 1;
+        }
+        assert_eq!(current, seg_end);
+    }
+
+    #[test]
+    fn test_part_sample_range_empty_segment() {
+        let metadata = Mp4Metadata {
+            duration_secs: 0.0,
+            timescale: 1000,
+            tracks: vec![TrackInfo {
+                track_id: 1,
+                track_type: TrackType::Video,
+                codec: "avc1".into(),
+                timescale: 90000,
+                duration: 0,
+                sample_table: SampleTable {
+                    stts: vec![],
+                    stsc: vec![],
+                    stsz: vec![],
+                    stco: vec![],
+                    stss: None,
+                    ctts: None,
+                },
+                width: Some(320),
+                height: Some(240),
+                sample_rate: None,
+                channels: None,
+                stsd_data: vec![],
+            }],
+        };
+        let track = &metadata.tracks[0];
+        let (ps, pe) = part_sample_range(track, 0, 0, 6.0, 0.5);
+        assert_eq!(ps, pe);
     }
 }

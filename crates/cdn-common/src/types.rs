@@ -111,6 +111,8 @@ pub struct LoadBalancerConfig {
     pub retries: u32,
     #[serde(default)]
     pub health_check: HealthCheckSiteConfig,
+    #[serde(default)]
+    pub adaptive_weight: AdaptiveWeightConfig,
 }
 
 impl Default for LoadBalancerConfig {
@@ -119,6 +121,35 @@ impl Default for LoadBalancerConfig {
             algorithm: LbAlgorithm::default(),
             retries: default_retries(),
             health_check: HealthCheckSiteConfig::default(),
+            adaptive_weight: AdaptiveWeightConfig::default(),
+        }
+    }
+}
+
+/// Adaptive weight adjustment based on sliding-window P99 latency and error rate.
+/// When enabled, effective origin weights are dynamically reduced for degraded origins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveWeightConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Sliding window size (number of requests per origin). Default 100.
+    #[serde(default = "default_adaptive_window")]
+    pub window_size: usize,
+    /// P99 latency threshold in ms — below this, no penalty. Default 500.
+    #[serde(default = "default_latency_threshold")]
+    pub latency_threshold_ms: f64,
+    /// Error rate threshold (0.0-1.0) — below this, no penalty. Default 0.1 (10%).
+    #[serde(default = "default_error_threshold")]
+    pub error_threshold: f64,
+}
+
+impl Default for AdaptiveWeightConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_size: default_adaptive_window(),
+            latency_threshold_ms: default_latency_threshold(),
+            error_threshold: default_error_threshold(),
         }
     }
 }
@@ -130,6 +161,7 @@ pub enum LbAlgorithm {
     RoundRobin,
     IpHash,
     Random,
+    LeastConn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,6 +708,15 @@ fn default_send_timeout() -> u64 {
 fn default_read_timeout() -> u64 {
     60
 }
+fn default_adaptive_window() -> usize {
+    100
+}
+fn default_latency_threshold() -> f64 {
+    500.0
+}
+fn default_error_threshold() -> f64 {
+    0.1
+}
 
 // ============================================================
 // Compression
@@ -1010,6 +1051,9 @@ pub struct DynamicPackagingConfig {
     /// Maximum input MP4 file size in bytes (default 2 GB)
     #[serde(default = "default_max_mp4_size")]
     pub max_mp4_size: u64,
+    /// LL-HLS (Low-Latency HLS) partial segment configuration
+    #[serde(default)]
+    pub ll_hls: LlHlsConfig,
 }
 
 impl Default for DynamicPackagingConfig {
@@ -1018,6 +1062,7 @@ impl Default for DynamicPackagingConfig {
             enabled: false,
             segment_duration: default_segment_duration(),
             max_mp4_size: default_max_mp4_size(),
+            ll_hls: LlHlsConfig::default(),
         }
     }
 }
@@ -1028,6 +1073,30 @@ fn default_segment_duration() -> f64 {
 
 fn default_max_mp4_size() -> u64 {
     2 * 1024 * 1024 * 1024 // 2 GB
+}
+
+// --- LL-HLS (Low-Latency HLS) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlHlsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Target partial segment duration in seconds (default 0.5)
+    #[serde(default = "default_part_duration")]
+    pub part_duration: f64,
+}
+
+impl Default for LlHlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            part_duration: default_part_duration(),
+        }
+    }
+}
+
+fn default_part_duration() -> f64 {
+    0.5
 }
 
 // --- Smart Prefetching ---

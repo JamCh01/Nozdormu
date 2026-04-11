@@ -51,6 +51,16 @@
       "timeout": 5,
       "healthy_threshold": 2,
       "unhealthy_threshold": 3
+    },
+    "adaptive_weight": {
+      "_enabled": "是否启用自适应权重调整（基于 P99 延迟和错误率自动调权）",
+      "enabled": true,
+      "_window_size": "滑动窗口大小（采样数），默认 100",
+      "window_size": 100,
+      "_latency_threshold_ms": "P99 延迟阈值（毫秒），超过此值开始惩罚权重",
+      "latency_threshold_ms": 500.0,
+      "_error_threshold": "错误率阈值（0.0-1.0），超过此值开始惩罚权重",
+      "error_threshold": 0.1
     }
   },
 
@@ -183,7 +193,13 @@
     "dynamic_packaging": {
       "enabled": true,
       "segment_duration": 6.0,
-      "max_mp4_size": 2147483648
+      "max_mp4_size": 2147483648,
+      "ll_hls": {
+        "_enabled": "启用 LL-HLS（Low-Latency HLS）部分分片",
+        "enabled": true,
+        "_part_duration": "部分分片目标时长（秒），默认 0.5s",
+        "part_duration": 0.5
+      }
     },
     "prefetch": {
       "enabled": true,

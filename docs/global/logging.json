@@ -1,9 +1,96 @@
 {
   "_doc": "etcd key: {prefix}/global/logging",
+  "_desc": "日志后端配置。支持 Redis Streams、Kafka、RabbitMQ、NATS、Pulsar 五种后端。每种后端支持 8 个独立日志通道，各通道可独立启用/禁用并路由到不同的 topic/subject/routing_key/stream_key。",
 
-  "_push_to_redis": "是否将请求日志推送到 Redis Streams",
+  "_push_to_redis": "（已废弃）是否将请求日志推送到 Redis Streams。当 backend 字段存在时忽略此字段",
   "push_to_redis": true,
 
-  "_stream_max_len": "Redis Stream 最大长度，超出后自动裁剪旧条目",
-  "stream_max_len": 100000
+  "_stream_max_len": "（已废弃）Redis Stream 最大长度。当 backend 字段存在时忽略此字段",
+  "stream_max_len": 100000,
+
+  "_backend": "日志后端配置（新版）。type 字段选择后端类型：redis / kafka / rabbitmq / nats / pulsar",
+
+  "_channels_doc": "8 个日志通道，每个通道有独立的 enabled 开关和 destination（目标名称）。destination 的含义取决于后端类型：Kafka/Pulsar=topic, NATS=subject, RabbitMQ=routing_key, Redis=stream_key",
+  "_channels": {
+    "_client_to_cdn": "客户端→CDN 阶段日志（请求接收、WAF/CC/缓存/路由处理耗时）",
+    "_cdn_to_origin": "CDN→源站 阶段日志（DNS解析+TCP连接+TLS握手耗时）",
+    "_origin_to_cdn": "源站→CDN 阶段日志（源站处理+响应头返回耗时）",
+    "_cdn_to_client": "CDN→客户端 阶段日志（响应处理+传输耗时）",
+    "_waf": "WAF 安全事件日志（拦截/放行）",
+    "_cc": "CC 频率限制事件日志（拦截/放行）",
+    "_cache": "缓存事件日志（命中/未命中/绕过）",
+    "_access": "完整请求日志（所有字段，等同于原始 LogEntry）"
+  },
+
+  "backend": {
+    "type": "kafka",
+    "brokers": ["kafka1:9092", "kafka2:9092", "kafka3:9092"],
+    "topic": "nozdormu-logs",
+    "acks": "1",
+    "channels": {
+      "client_to_cdn": { "enabled": true, "destination": "nozdormu-logs.client_to_cdn" },
+      "cdn_to_origin": { "enabled": true, "destination": "nozdormu-logs.cdn_to_origin" },
+      "origin_to_cdn": { "enabled": true, "destination": "nozdormu-logs.origin_to_cdn" },
+      "cdn_to_client": { "enabled": true, "destination": "nozdormu-logs.cdn_to_client" },
+      "waf":           { "enabled": true, "destination": "nozdormu-logs.waf" },
+      "cc":            { "enabled": true, "destination": "nozdormu-logs.cc" },
+      "cache":         { "enabled": true, "destination": "nozdormu-logs.cache" },
+      "access":        { "enabled": true, "destination": "nozdormu-logs.access" }
+    }
+  },
+
+  "_backend_examples": {
+    "_redis": {
+      "type": "redis",
+      "max_len": 100000,
+      "channels": {
+        "client_to_cdn": { "enabled": true, "destination": "nozdormu:log:client_to_cdn" },
+        "cdn_to_origin": { "enabled": true, "destination": "nozdormu:log:cdn_to_origin" },
+        "origin_to_cdn": { "enabled": true, "destination": "nozdormu:log:origin_to_cdn" },
+        "cdn_to_client": { "enabled": true, "destination": "nozdormu:log:cdn_to_client" },
+        "waf":           { "enabled": true, "destination": "nozdormu:log:waf" },
+        "cc":            { "enabled": true, "destination": "nozdormu:log:cc" },
+        "cache":         { "enabled": true, "destination": "nozdormu:log:cache" },
+        "access":        { "enabled": true, "destination": "nozdormu:log:access" }
+      }
+    },
+    "_rabbitmq": {
+      "type": "rabbitmq",
+      "urls": ["amqp://user:pass@rabbit1:5672/%2f"],
+      "exchange": "nozdormu.logs",
+      "exchange_type": "direct",
+      "durable": true,
+      "_note": "destination 用作 routing_key",
+      "channels": {
+        "client_to_cdn": { "enabled": true, "destination": "client_to_cdn" },
+        "cdn_to_origin": { "enabled": true, "destination": "cdn_to_origin" },
+        "origin_to_cdn": { "enabled": true, "destination": "origin_to_cdn" },
+        "cdn_to_client": { "enabled": true, "destination": "cdn_to_client" },
+        "waf":           { "enabled": true, "destination": "waf" },
+        "cc":            { "enabled": false, "destination": "cc" },
+        "cache":         { "enabled": true, "destination": "cache" },
+        "access":        { "enabled": true, "destination": "access" }
+      }
+    },
+    "_nats": {
+      "type": "nats",
+      "urls": ["nats://nats1:4222", "nats://nats2:4222"],
+      "subject": "nozdormu.logs",
+      "stream_name": "CDN_LOGS",
+      "_note": "destination 用作 subject",
+      "channels": {
+        "client_to_cdn": { "enabled": true, "destination": "nozdormu.logs.client_to_cdn" },
+        "access":        { "enabled": true, "destination": "nozdormu.logs.access" }
+      }
+    },
+    "_pulsar": {
+      "type": "pulsar",
+      "urls": ["pulsar://pulsar1:6650"],
+      "_note": "destination 用作 topic，每个 topic 自动创建独立 producer",
+      "channels": {
+        "client_to_cdn": { "enabled": true, "destination": "persistent://public/default/cdn-client-to-cdn" },
+        "access":        { "enabled": true, "destination": "persistent://public/default/cdn-access" }
+      }
+    }
+  }
 }

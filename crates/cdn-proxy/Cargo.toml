@@ -12,10 +12,18 @@ path = "src/main.rs"
 name = "cdn_proxy"
 path = "src/lib.rs"
 
+[features]
+default = []
+kafka-sink = ["cdn-log/kafka-sink"]
+rabbitmq-sink = ["cdn-log/rabbitmq-sink"]
+nats-sink = ["cdn-log/nats-sink"]
+pulsar-sink = ["cdn-log/pulsar-sink"]
+
 [dependencies]
 cdn-common = { workspace = true }
 cdn-config = { workspace = true }
 cdn-cache = { workspace = true }
+cdn-log = { workspace = true }
 cdn-image = { workspace = true }
 cdn-middleware = { workspace = true }
 cdn-streaming = { workspace = true }

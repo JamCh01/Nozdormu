@@ -310,8 +310,10 @@ gRPC > WebSocket > SSE > HTTP 优先级检测。
 ### 7.2 LB 算法
 
 - RoundRobin: Pingora 内置
-- IpHash: 自定义 DJB2 哈希 + 加权选择
+- IpHash: Ketama 一致性哈希环 + 加权虚拟节点（SipHash，40 vnodes/weight）
 - Random: 自定义加权随机
+- LeastConn: AtomicU32 per-origin 活跃连接计数
+- 自适应权重: 滑动窗口 P99 延迟 + 错误率 → effective_weight 乘数 [0.1, 1.0]，所有算法使用
 
 ### 7.3 健康检查
 
