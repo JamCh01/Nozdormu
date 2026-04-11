@@ -134,6 +134,12 @@ pub struct TsDemuxer {
     audio_dts: u64,
 }
 
+impl Default for TsDemuxer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TsDemuxer {
     pub fn new() -> Self {
         Self {

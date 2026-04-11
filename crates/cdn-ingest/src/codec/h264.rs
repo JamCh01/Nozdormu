@@ -95,12 +95,8 @@ impl H264Config {
             return Err(IngestError::Codec("empty PPS".into()));
         }
 
-        // SPS NAL unit type is sps[0] & 0x1F == 7
-        let sps_data = if !sps.is_empty() && (sps[0] & 0x1F) == 7 {
-            sps.to_vec()
-        } else {
-            sps.to_vec()
-        };
+        // SPS data is used as-is (NAL type check was redundant since both branches were identical)
+        let sps_data = sps.to_vec();
 
         let profile = if sps_data.len() > 1 { sps_data[1] } else { 0 };
         let level = if sps_data.len() > 3 { sps_data[3] } else { 0 };
@@ -138,13 +134,14 @@ impl H264Config {
 
     fn build_avc1_entry(&self) -> Vec<u8> {
         // Build avcC box (AVCDecoderConfigurationRecord)
-        let mut avcc_content = Vec::new();
-        avcc_content.push(1); // configurationVersion
-        avcc_content.push(self.profile);
-        avcc_content.push(0); // profile_compatibility
-        avcc_content.push(self.level);
-        avcc_content.push(0xFF); // lengthSizeMinusOne = 3 (4 bytes)
-        avcc_content.push(0xE1); // numSPS = 1
+        let mut avcc_content = vec![
+            1, // configurationVersion
+            self.profile,
+            0, // profile_compatibility
+            self.level,
+            0xFF, // lengthSizeMinusOne = 3 (4 bytes)
+            0xE1, // numSPS = 1
+        ];
         avcc_content.extend_from_slice(&(self.sps.len() as u16).to_be_bytes());
         avcc_content.extend_from_slice(&self.sps);
         avcc_content.push(1); // numPPS

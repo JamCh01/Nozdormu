@@ -41,11 +41,10 @@ impl AacConfig {
                     "AudioSpecificConfig too short for explicit frequency".into(),
                 ));
             }
-            let freq = ((data[1] as u32 & 0x7F) << 17)
+            ((data[1] as u32 & 0x7F) << 17)
                 | ((data[2] as u32) << 9)
                 | ((data[3] as u32) << 1)
-                | ((data[4] as u32) >> 7);
-            freq
+                | ((data[4] as u32) >> 7)
         } else {
             return Err(IngestError::Codec(format!(
                 "invalid sampling frequency index: {}",
@@ -115,7 +114,7 @@ impl AacConfig {
         // reserved
         entry.extend_from_slice(&0u16.to_be_bytes());
         // samplerate as 16.16 fixed point
-        entry.extend_from_slice(&(self.sample_rate as u32).to_be_bytes());
+        entry.extend_from_slice(&self.sample_rate.to_be_bytes());
         entry.extend_from_slice(&0u16.to_be_bytes()); // fractional part
                                                       // esds box
         entry.extend_from_slice(&esds_box);

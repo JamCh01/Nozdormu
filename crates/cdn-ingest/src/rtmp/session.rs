@@ -94,6 +94,10 @@ pub async fn handle_rtmp_connection(
     let mut stream_name = String::new();
     let mut video_dts: u64 = 0;
     let mut audio_dts: u64 = 0;
+    // Suppress unused-assignment warnings: these are updated in the loop
+    // and will be used when DTS-based duration calculation is implemented.
+    let _ = &video_dts;
+    let _ = &audio_dts;
 
     loop {
         let n = stream.read(&mut buf).await?;

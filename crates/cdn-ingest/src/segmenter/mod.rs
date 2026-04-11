@@ -451,11 +451,7 @@ fn compute_durations(samples: &mut [SampleData], _timescale: u32) {
     // For live, we use a fixed duration estimate per sample.
     // Video: 90000/30 = 3000 (30fps), Audio: 1024 (AAC frame size)
     // This is a simplification — in production, DTS differences would be used.
-    let default_duration = if samples.len() == 1 {
-        3000 // ~30fps at 90000 timescale
-    } else {
-        3000
-    };
+    let default_duration = 3000u32; // ~30fps at 90000 timescale
 
     for sample in samples.iter_mut() {
         if sample.duration == 0 {
