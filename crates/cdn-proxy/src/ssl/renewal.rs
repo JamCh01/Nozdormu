@@ -1,9 +1,12 @@
+use crate::admin::webhook::{self, WebhookDeliveryTracker, WebhookEvent};
 use crate::logging::metrics::ACME_RENEWAL_TOTAL;
 use crate::ssl::acme::AcmeClient;
 use crate::ssl::manager::CertManager;
 use crate::ssl::storage::CertStorage;
 use crate::utils::lock::{lock_names, DistributedLock};
 use crate::utils::redis_pool::RedisPool;
+use arc_swap::ArcSwap;
+use cdn_config::LiveConfig;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +28,8 @@ pub struct RenewalManager {
     redis_pool: Arc<RedisPool>,
     node_id: String,
     renewal_days: u64,
+    live_config: Arc<ArcSwap<LiveConfig>>,
+    webhook_tracker: Arc<WebhookDeliveryTracker>,
 }
 
 impl RenewalManager {
@@ -35,6 +40,8 @@ impl RenewalManager {
         redis_pool: Arc<RedisPool>,
         node_id: String,
         renewal_days: u64,
+        live_config: Arc<ArcSwap<LiveConfig>>,
+        webhook_tracker: Arc<WebhookDeliveryTracker>,
     ) -> Self {
         Self {
             storage,
@@ -43,6 +50,8 @@ impl RenewalManager {
             redis_pool,
             node_id,
             renewal_days,
+            live_config,
+            webhook_tracker,
         }
     }
 
@@ -118,6 +127,7 @@ impl RenewalManager {
                 Ok(issued) => {
                     let expires_at = crate::ssl::storage::CertData::parse_expiry(&issued.cert_pem)
                         .unwrap_or(chrono::Utc::now().timestamp() + 86400 * 90);
+                    let provider_name = issued.provider.clone();
                     let new_cert = crate::ssl::storage::CertData {
                         cert_pem: issued.cert_pem,
                         key_pem: issued.key_pem,
@@ -134,10 +144,34 @@ impl RenewalManager {
                     renewed += 1;
                     ACME_RENEWAL_TOTAL.with_label_values(&["success"]).inc();
                     log::info!("[Renewal] successfully renewed cert for {}", domain);
+                    // Dispatch webhook using the site config for this domain
+                    if let Some(site) = self.live_config.load().match_site(domain) {
+                        webhook::dispatch(
+                            &site.webhook,
+                            WebhookEvent::CertRenewalSuccess {
+                                domain: domain.clone(),
+                                provider: provider_name,
+                                expires_at,
+                                node_id: self.node_id.clone(),
+                            },
+                            &self.webhook_tracker,
+                        );
+                    }
                 }
                 Err(e) => {
                     ACME_RENEWAL_TOTAL.with_label_values(&["failure"]).inc();
                     log::error!("[Renewal] failed to renew cert for {}: {}", domain, e);
+                    if let Some(site) = self.live_config.load().match_site(domain) {
+                        webhook::dispatch(
+                            &site.webhook,
+                            WebhookEvent::CertRenewalFailure {
+                                domain: domain.clone(),
+                                error: format!("{}", e),
+                                node_id: self.node_id.clone(),
+                            },
+                            &self.webhook_tracker,
+                        );
+                    }
                 }
             }
 

@@ -1,0 +1,39 @@
+{
+  "_doc": "Webhook 通知配置 — 按站点配置，当关键事件发生时 POST 到配置的 URL",
+  "_doc2": "事件类型：证书续期成功/失败、健康状态变更、缓存清除完成",
+  "_doc3": "每个 URL 独立投递+重试，HMAC-SHA256 签名可选",
+
+  "site_id": "webhook-demo",
+  "enabled": true,
+  "port": 80,
+  "domains": ["example.com"],
+  "origins": [
+    {
+      "id": "origin-1",
+      "host": "backend.example.com",
+      "port": 80,
+      "weight": 10,
+      "protocol": "http"
+    }
+  ],
+
+  "webhook": {
+    "_enabled": "是否启用 webhook 通知",
+    "enabled": true,
+
+    "_urls": "webhook 端点 URL 列表，所有 URL 接收所有事件",
+    "urls": [
+      "https://alerts.example.com/cdn-webhook",
+      "https://slack-gateway.internal/webhook"
+    ],
+
+    "_secret": "可选的 HMAC-SHA256 签名密钥，设置后每个请求携带 X-Webhook-Signature 头",
+    "secret": "your_hmac_secret_for_signatures",
+
+    "_timeout_secs": "HTTP 请求超时（秒），默认 10",
+    "timeout_secs": 10,
+
+    "_max_retries": "最大重试次数（指数退避 1s/2s/4s/8s），默认 3",
+    "max_retries": 3
+  }
+}

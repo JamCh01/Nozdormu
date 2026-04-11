@@ -2085,6 +2085,13 @@ impl CdnProxy {
             ("GET", "/log/status") => {
                 crate::admin::endpoints::get_log_status(&self.admin_state).await
             }
+            ("GET", "/webhook/events") => {
+                crate::admin::endpoints::webhook_list_events(&self.admin_state).await
+            }
+            ("POST", p) if p.starts_with("/webhook/test/") => {
+                let site_id = &p[14..]; // strip "/webhook/test/"
+                crate::admin::endpoints::webhook_test(&self.admin_state, site_id).await
+            }
             _ => (
                 404,
                 serde_json::json!({"status": "error", "message": "not found"}),

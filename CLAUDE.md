@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (558 unit/integration tests across 9 crates)
+# Run all tests (568 unit/integration tests across 9 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -57,7 +57,7 @@ Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-log` / `cd
 Detailed JSON examples with inline documentation for every config option:
 
 - **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization, ingest
-- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_least_conn, lb_backup_failover, waf, waf_log_mode, waf_body, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, error_pages, full
+- **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_least_conn, lb_backup_failover, waf, waf_log_mode, waf_body, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, error_pages, webhook, full
 
 ## Architecture Essentials
 
@@ -92,6 +92,7 @@ Detailed JSON examples with inline documentation for every config option:
 - **TLS listener & 0-RTT Early Data**: Optional downstream TLS listener via `tls_listen` config field. Uses Pingora's `TlsSettings::with_callbacks()` + `TlsAccept` trait for dynamic certificate provisioning — `CdnTlsAccept` in `ssl/tls_accept.rs` looks up certs via `CertManager` (SNI → exact → wildcard → default). TLS 1.3 0-RTT enabled via `set_max_early_data()` on `SslAcceptorBuilder` when `early_data: true`. After handshake, `SSL_get_early_data_status()` (FFI) stores result in `SslDigest.extension` as `TlsHandshakeData`. In `request_filter`, non-idempotent methods (POST/PUT/DELETE/PATCH) on 0-RTT connections are rejected with 425 Too Early. Idempotent 0-RTT requests get `Early-Data: 1` upstream header per RFC 8470. Prometheus counter `cdn_early_data_requests_total` tracks accepted/rejected. Both TCP and TLS listeners share the same `CdnProxy` instance.
 - **ACME certificate issuance**: Complete ACME v2 (RFC 8555) protocol flow in `ssl/acme.rs` using `instant-acme` crate. Multi-provider rotation (Let's Encrypt → ZeroSSL → Buypass → Google) with EAB support. Account credentials persisted in Redis (`nozdormu:acme:account:{provider}:{email_hash}`, TTL 365d) for reuse across nodes. HTTP-01 challenge tokens stored in `ChallengeStore` (in-memory DashMap), served at `/.well-known/acme-challenge/` before WAF/routing. CSR generated via `rcgen` (ECDSA P-256). Polling with exponential backoff (2s→10s, 300s timeout). Challenge tokens cleaned up after validation or on error.
 - **Certificate auto-renewal**: `RenewalBgService` (Pingora `BackgroundService`) runs `RenewalManager::check_and_renew()` — first check 60s after startup, then every 24h. Two-level Redis distributed locking: scan lock (`renewal:scan`, TTL 1h) ensures only one node scans, per-domain lock (`renewal:{domain}`, TTL 10min) prevents duplicate issuance. Double-check after lock acquisition. After successful renewal, `CertManager::invalidate(domain)` flushes the moka cache so TLS callbacks pick up the new cert. 5s rate-limit delay between renewals. Prometheus counters: `cdn_acme_issuance_total`, `cdn_acme_issuance_duration_seconds`, `cdn_acme_renewal_total`.
+- **Webhook notifications**: Per-site `WebhookConfig` in `SiteConfig` with `enabled`, `urls`, `secret`, `timeout_secs`, `max_retries`. `dispatch()` in `admin/webhook.rs` is fire-and-forget: checks config, spawns `tokio::spawn` per URL for delivery with exponential backoff retry. Three event sources: `RenewalManager` looks up site by domain via `LiveConfig::match_site()` and emits `CertRenewalSuccess`/`CertRenewalFailure`; `update_probe_state()` in `health_probe.rs` returns `Option<bool>` on health transitions, `probe_loop` looks up site config and emits `HealthStatusChange`; `purge_site_background()` receives site's `WebhookConfig` and emits `CachePurgeCompleted`. Optional HMAC-SHA256 signature (`ring::hmac`) in `X-Webhook-Signature` header. `WebhookDeliveryTracker` (DashMap, 1h auto-eviction) tracks delivery status. Admin endpoints: `GET /_admin/webhook/events`, `POST /_admin/webhook/test/{site_id}`. Prometheus counter: `cdn_webhook_delivery_total` with labels `[event_type, result]`.
 
 ## Key Patterns
 
@@ -165,6 +166,7 @@ Critical production requirements:
 - Config history tests use serde roundtrips (ConfigVersionSnapshot, VersionMeta, ConfigChangeType), version key formatting (zero-padded), snapshot-to-summary conversion, and change type equality
 - Ingest tests: config serde roundtrips, stream store (create/get/remove/ring buffer eviction/max streams/waiter notification), stream key auth (valid/invalid/disabled), H.264 SPS parsing (AVCC + Annex-B, stsd synthesis), AAC AudioSpecificConfig parsing (44100/48000 Hz, stsd synthesis), live HLS manifest generation (standard/LL-HLS/ENDLIST/PRELOAD-HINT), blocking playlist reload (already available/wait+notify/timeout), HTTP handler URL parsing (segment/part filenames, HLS params), segmenter frame push
 - Error pages tests: serde roundtrip (HashMap<u16, String> deserialization), default empty map, validation (invalid status codes 200/600 rejected, valid 403/404/500/502 accepted)
+- Webhook tests: WebhookEvent serde roundtrip (all 5 variants with event_type tag), event_type_label correctness, WebhookDeliveryTracker lifecycle (insert/delivered/failed), tracker auto-eviction (1h cutoff), tracker list sorted by created_at, notify with None sender (no-op), notify with closed sender (no panic), HMAC signature computation (deterministic, different secrets produce different output), WebhookConfig serde (full and minimal/defaults)
 
 ### E2E Tests
 

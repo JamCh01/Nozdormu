@@ -171,6 +171,7 @@ mod tests {
             range: RangeConfig::default(),
             streaming: StreamingConfig::default(),
             error_pages: std::collections::HashMap::new(),
+            webhook: cdn_common::WebhookConfig::default(),
         }
     }
 

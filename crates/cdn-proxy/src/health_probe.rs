@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
+use crate::admin::webhook::{self, WebhookDeliveryTracker, WebhookEvent};
 use crate::dns::DnsResolver;
 use crate::health::HealthChecker;
 use crate::logging::metrics::{HEALTH_CHECK_DURATION, HEALTH_CHECK_TOTAL};
@@ -69,6 +70,8 @@ pub struct ActiveHealthCheckService {
     global_timeout: u64,
     global_healthy_threshold: u32,
     global_unhealthy_threshold: u32,
+    webhook_tracker: Arc<WebhookDeliveryTracker>,
+    node_id: String,
 }
 
 impl ActiveHealthCheckService {
@@ -80,6 +83,8 @@ impl ActiveHealthCheckService {
         global_timeout: u64,
         global_healthy_threshold: u32,
         global_unhealthy_threshold: u32,
+        webhook_tracker: Arc<WebhookDeliveryTracker>,
+        node_id: String,
     ) -> Self {
         Self {
             live_config,
@@ -89,6 +94,8 @@ impl ActiveHealthCheckService {
             global_timeout,
             global_healthy_threshold,
             global_unhealthy_threshold,
+            webhook_tracker,
+            node_id,
         }
     }
 
@@ -212,9 +219,12 @@ impl BackgroundService for ActiveHealthCheckService {
                 let health = Arc::clone(&self.health_checker);
                 let dns = Arc::clone(&self.dns);
                 let target = target.clone();
+                let live_config = Arc::clone(&self.live_config);
+                let webhook_tracker = Arc::clone(&self.webhook_tracker);
+                let node_id = self.node_id.clone();
 
                 let handle = tokio::spawn(async move {
-                    probe_loop(target, health, dns).await;
+                    probe_loop(target, health, dns, live_config, webhook_tracker, node_id).await;
                 });
 
                 running.insert(key.clone(), handle);
@@ -227,7 +237,14 @@ impl BackgroundService for ActiveHealthCheckService {
 
 // ── Per-origin probe loop ──
 
-async fn probe_loop(target: ProbeTarget, health: Arc<HealthChecker>, dns: Arc<DnsResolver>) {
+async fn probe_loop(
+    target: ProbeTarget,
+    health: Arc<HealthChecker>,
+    dns: Arc<DnsResolver>,
+    live_config: Arc<ArcSwap<LiveConfig>>,
+    webhook_tracker: Arc<WebhookDeliveryTracker>,
+    node_id: String,
+) {
     // Initial jitter: random delay in [0, interval) to spread probes
     let jitter_ms = fastrand::u64(..target.interval.as_millis() as u64);
     tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
@@ -270,7 +287,29 @@ async fn probe_loop(target: ProbeTarget, health: Arc<HealthChecker>, dns: Arc<Dn
 
         // Update probe state and check thresholds
         let success = result.is_ok();
-        update_probe_state(&target, &health, &mut state, success);
+        let transition = update_probe_state(&target, &health, &mut state, success);
+
+        // Emit webhook on health status transition
+        if let Some(now_healthy) = transition {
+            // Look up site config for this origin's site
+            if let Some(site) = live_config.load().sites.get(&target.site_id) {
+                webhook::dispatch(
+                    &site.webhook,
+                    WebhookEvent::HealthStatusChange {
+                        site_id: target.site_id.clone(),
+                        origin_id: target.origin_id.clone(),
+                        healthy: now_healthy,
+                        consecutive_count: if now_healthy {
+                            state.consecutive_successes
+                        } else {
+                            state.consecutive_failures
+                        },
+                        node_id: node_id.clone(),
+                    },
+                    &webhook_tracker,
+                );
+            }
+        }
 
         if let Err(ref reason) = result {
             log::debug!(
@@ -285,12 +324,13 @@ async fn probe_loop(target: ProbeTarget, health: Arc<HealthChecker>, dns: Arc<Dn
 
 // ── Probe state management ──
 
+/// Returns `Some(true)` on recovery, `Some(false)` on failure transition, `None` for no change.
 fn update_probe_state(
     target: &ProbeTarget,
     health: &HealthChecker,
     state: &mut ProbeState,
     success: bool,
-) {
+) -> Option<bool> {
     // Record metadata for admin API
     health.record_active_check(&target.site_id, &target.origin_id, success);
 
@@ -307,6 +347,7 @@ fn update_probe_state(
                 target.origin_id,
                 state.consecutive_successes
             );
+            return Some(true);
         }
     } else {
         state.consecutive_successes = 0;
@@ -321,8 +362,11 @@ fn update_probe_state(
                 target.origin_id,
                 state.consecutive_failures
             );
+            return Some(false);
         }
     }
+
+    None
 }
 
 // ── HTTP probe ──

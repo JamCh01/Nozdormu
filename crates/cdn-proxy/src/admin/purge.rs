@@ -1,11 +1,13 @@
 use cdn_cache::key::generate_cache_key;
 use cdn_cache::storage::CacheStorage;
+use cdn_common::WebhookConfig;
 use chrono::Utc;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::admin::webhook::{self, WebhookDeliveryTracker, WebhookEvent};
 use crate::logging::metrics::{CACHE_PURGE_DURATION, CACHE_PURGE_KEYS_TOTAL, CACHE_PURGE_TOTAL};
 use crate::utils::redis_pool::RedisPool;
 
@@ -202,6 +204,8 @@ pub async fn purge_site_background(
     site_id: String,
     task_tracker: Arc<PurgeTaskTracker>,
     task_id: String,
+    webhook_config: WebhookConfig,
+    webhook_tracker: Arc<WebhookDeliveryTracker>,
 ) {
     let start = Instant::now();
 
@@ -230,6 +234,19 @@ pub async fn purge_site_background(
             CACHE_PURGE_KEYS_TOTAL
                 .with_label_values(&[site_id.as_str(), "site"])
                 .inc_by(keys_deleted);
+
+            webhook::dispatch(
+                &webhook_config,
+                WebhookEvent::CachePurgeCompleted {
+                    task_id: task_id.clone(),
+                    site_id: site_id.clone(),
+                    success: true,
+                    keys_deleted,
+                    error: None,
+                    duration_secs: elapsed,
+                },
+                &webhook_tracker,
+            );
         }
         Err(ref e) => {
             log::error!(
@@ -243,6 +260,19 @@ pub async fn purge_site_background(
             CACHE_PURGE_TOTAL
                 .with_label_values(&[site_id.as_str(), "site", "error"])
                 .inc();
+
+            webhook::dispatch(
+                &webhook_config,
+                WebhookEvent::CachePurgeCompleted {
+                    task_id: task_id.clone(),
+                    site_id: site_id.clone(),
+                    success: false,
+                    keys_deleted: 0,
+                    error: Some(e.clone()),
+                    duration_secs: elapsed,
+                },
+                &webhook_tracker,
+            );
         }
     }
 

@@ -26,6 +26,7 @@
 - **压缩** -- gzip、Brotli、Zstandard，`Accept-Encoding` 协商；按站点配置+全局默认；WebSocket/SSE/gRPC 和不可压缩类型自动跳过；编码器错误传播（非静默吞没）
 - **管理 API** -- 挂载于代理端口 `/_admin/` 路径，可对公网暴露；Bearer Token 认证（etcd `global/security` 配置），常量时间比较；配置重载、配置版本历史查询与回滚、健康状态及手动覆盖、CC 状态检查、缓存清除（精确 URL + 全站后台任务 + 按 Tag 清除）、缓存预热（批量 URL 回源写入缓存）；内置 OpenAPI 3.1 规范（`/_admin/openapi.json`）和 Swagger UI（`/_admin/swagger`）
 - **自定义错误页** -- 按站点、按状态码配置自定义 HTML 错误页面（`error_pages: HashMap<u16, String>`），覆盖 400/403/404/413/425/429 等错误响应；未配置的状态码回退到默认纯文本
+- **Webhook 通知** -- 按站点配置，关键事件（证书续期成功/失败、健康状态变更、缓存清除完成）自动 POST 到配置的 webhook URL；HMAC-SHA256 签名验证；指数退避重试；管理 API 查询投递状态
 
 ## 架构
 
@@ -395,7 +396,7 @@ curl -X POST http://localhost:6188/_admin/reload \
 ## 开发
 
 ```bash
-# 运行单元/集成测试（558 个测试）
+# 运行单元/集成测试（568 个测试）
 cargo test
 
 # 代码检查

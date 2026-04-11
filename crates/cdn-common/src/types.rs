@@ -48,6 +48,9 @@ pub struct SiteConfig {
     /// Custom error pages: status code → inline HTML content.
     #[serde(default)]
     pub error_pages: std::collections::HashMap<u16, String>,
+    /// Webhook notification config for this site.
+    #[serde(default)]
+    pub webhook: WebhookConfig,
 }
 
 impl SiteConfig {
@@ -1132,4 +1135,59 @@ fn default_prefetch_count() -> u32 {
 
 fn default_prefetch_concurrency() -> u32 {
     4
+}
+
+// ============================================================
+// Webhook Notifications
+// ============================================================
+
+fn default_webhook_timeout() -> u64 {
+    10
+}
+
+fn default_webhook_max_retries() -> u32 {
+    3
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// Whether webhook notifications are enabled for this site.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Webhook endpoint URLs to POST to. All URLs receive all events.
+    #[serde(default)]
+    pub urls: Vec<String>,
+    /// Optional shared secret for HMAC-SHA256 signature (X-Webhook-Signature header).
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Request timeout in seconds (default: 10).
+    #[serde(default = "default_webhook_timeout")]
+    pub timeout_secs: u64,
+    /// Max retry attempts per delivery (default: 3).
+    #[serde(default = "default_webhook_max_retries")]
+    pub max_retries: u32,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            urls: Vec::new(),
+            secret: None,
+            timeout_secs: default_webhook_timeout(),
+            max_retries: default_webhook_max_retries(),
+        }
+    }
+}
+
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookConfig")
+            .field("enabled", &self.enabled)
+            .field("urls", &self.urls)
+            .field("secret", &self.secret.as_ref().map(|_| "[REDACTED]"))
+            .field("timeout_secs", &self.timeout_secs)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }

@@ -323,6 +323,17 @@ pub static ADAPTIVE_WEIGHT_EFFECTIVE: Lazy<prometheus::GaugeVec> = Lazy::new(|| 
     .unwrap()
 });
 
+// ── Webhook Delivery ──
+
+pub static WEBHOOK_DELIVERY_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "cdn_webhook_delivery_total",
+        "Total webhook delivery attempts",
+        &["event_type", "result"] // result: "success", "failure"
+    )
+    .unwrap()
+});
+
 /// Record metrics for a completed request.
 pub fn record_request(
     site_id: &str,

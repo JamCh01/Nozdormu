@@ -9,6 +9,7 @@ use cdn_config::{load_cdn_config, BootstrapConfig, LiveConfig, NodeConfig};
 use cdn_middleware::cc::CcEngine;
 use cdn_middleware::waf::WafEngine;
 use cdn_proxy::admin::purge::PurgeTaskTracker;
+use cdn_proxy::admin::webhook::WebhookDeliveryTracker;
 use cdn_proxy::admin::AdminState;
 use cdn_proxy::balancer::DynamicBalancer;
 use cdn_proxy::dns::DnsResolver;
@@ -278,6 +279,9 @@ fn main() {
 
     let challenge_store = Arc::new(ChallengeStore::new());
 
+    // ── Webhook delivery tracker (shared across all event sources) ──
+    let webhook_tracker = Arc::new(WebhookDeliveryTracker::new());
+
     // ── Admin API state ──
     let admin_state = Arc::new(AdminState {
         live_config: Arc::clone(&live_config),
@@ -292,6 +296,7 @@ fn main() {
         warm_tracker: Arc::new(cdn_proxy::admin::warm::WarmTaskTracker::new()),
         log_backend_name,
         live_stream_store: None, // set after ingest services are created
+        webhook_tracker: Arc::clone(&webhook_tracker),
     });
 
     // Active health check probes (clone refs before CdnProxy takes ownership)
@@ -304,6 +309,8 @@ fn main() {
             node_config.balancer.health_check_timeout,
             node_config.balancer.healthy_threshold,
             node_config.balancer.unhealthy_threshold,
+            Arc::clone(&webhook_tracker),
+            node_config.node.id.clone(),
         );
         background_service("active health check", service)
     };
@@ -335,6 +342,8 @@ fn main() {
         Arc::clone(&redis_pool),
         node_config.node.id.clone(),
         node_config.ssl.renewal_days,
+        Arc::clone(&live_config),
+        Arc::clone(&webhook_tracker),
     ));
 
     // ── 6.5 Live ingest services (optional) ──

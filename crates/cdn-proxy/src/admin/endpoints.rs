@@ -3,6 +3,7 @@ use crate::admin::purge::{
     PurgeTaskState, PurgeTaskStatus, PurgeTaskTracker,
 };
 use crate::admin::warm::{self, WarmRequest, WarmTaskState, WarmTaskStatus, WarmTaskTracker};
+use crate::admin::webhook::{self, WebhookDeliveryTracker, WebhookEvent};
 use crate::balancer::DynamicBalancer;
 use crate::ssl::challenge::ChallengeStore;
 use crate::utils::redis_pool::RedisPool;
@@ -31,6 +32,8 @@ pub struct AdminState {
     pub log_backend_name: String,
     /// Live stream store for ingest admin endpoints (None if ingest disabled).
     pub live_stream_store: Option<Arc<cdn_ingest::LiveStreamStore>>,
+    /// Webhook delivery tracker for status endpoint.
+    pub webhook_tracker: Arc<WebhookDeliveryTracker>,
 }
 
 /// Constant-time byte comparison (re-export from cdn-common).
@@ -294,8 +297,26 @@ pub async fn purge_cache(state: &AdminState, body: &[u8]) -> (u16, Value) {
             let tracker = Arc::clone(&state.purge_tracker);
             let tid = task_id.clone();
             let sid = site_id.clone();
+            // Look up site webhook config for this purge
+            let wh_config = state
+                .live_config
+                .load()
+                .sites
+                .get(&site_id)
+                .map(|s| s.webhook.clone())
+                .unwrap_or_default();
+            let wh_tracker = Arc::clone(&state.webhook_tracker);
             tokio::spawn(async move {
-                purge_site_background(redis_pool, cache_storage, sid, tracker, tid).await;
+                purge_site_background(
+                    redis_pool,
+                    cache_storage,
+                    sid,
+                    tracker,
+                    tid,
+                    wh_config,
+                    wh_tracker,
+                )
+                .await;
             });
 
             (
@@ -603,6 +624,53 @@ pub async fn get_log_status(state: &AdminState) -> (u16, Value) {
         200,
         json!({
             "backend": config.as_str(),
+        }),
+    )
+}
+
+/// GET /_admin/webhook/events — List recent webhook delivery attempts.
+pub async fn webhook_list_events(state: &AdminState) -> (u16, Value) {
+    let events = state.webhook_tracker.list();
+    (200, json!({ "deliveries": events }))
+}
+
+/// POST /_admin/webhook/test/{site_id} — Send a test webhook event for a site.
+pub async fn webhook_test(state: &AdminState, site_id: &str) -> (u16, Value) {
+    let site = match state.live_config.load().sites.get(site_id) {
+        Some(s) => Arc::clone(s),
+        None => {
+            return (
+                404,
+                json!({
+                    "status": "error",
+                    "message": format!("site not found: {}", site_id)
+                }),
+            )
+        }
+    };
+    if !site.webhook.enabled || site.webhook.urls.is_empty() {
+        return (
+            400,
+            json!({
+                "status": "error",
+                "message": "webhooks not configured for this site"
+            }),
+        );
+    }
+    webhook::dispatch(
+        &site.webhook,
+        WebhookEvent::Test {
+            message: format!("test webhook from Nozdormu CDN for site {}", site_id),
+        },
+        &state.webhook_tracker,
+    );
+    (
+        200,
+        json!({
+            "status": "ok",
+            "message": "test webhook event dispatched",
+            "site_id": site_id,
+            "urls": site.webhook.urls,
         }),
     )
 }
