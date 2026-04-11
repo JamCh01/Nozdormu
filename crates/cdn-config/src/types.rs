@@ -19,6 +19,10 @@ pub struct CdnConfig {
     /// Max early data size in bytes. Default 16384.
     #[serde(default = "default_max_early_data")]
     pub max_early_data: u32,
+
+    /// Live ingest configuration (RTMP/SRT). Parsed as raw JSON, deserialized in cdn-proxy.
+    #[serde(default)]
+    pub ingest: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

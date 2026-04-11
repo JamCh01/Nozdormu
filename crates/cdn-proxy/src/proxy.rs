@@ -75,6 +75,8 @@ pub struct CdnProxy {
     pub coalescing_map: Arc<dashmap::DashMap<String, Arc<CoalescingEntry>>>,
     /// Log channel routing configuration (8 independent channels).
     pub log_channels: cdn_log::LogChannelsConfig,
+    /// Live stream store for RTMP/SRT ingest (None if ingest disabled).
+    pub live_stream_store: Option<Arc<cdn_ingest::LiveStreamStore>>,
 }
 
 /// Entry for request coalescing — waiters block on `notify` until the leader completes.
@@ -115,6 +117,29 @@ impl ProxyHttp for CdnProxy {
         // ── 3. Admin API (public, Bearer token auth) ──
         if path.starts_with("/_admin/") {
             return self.handle_admin_request(session).await;
+        }
+
+        // ── 3.5 Live stream serving (RTMP/SRT ingest) ──
+        if path.starts_with("/live/") {
+            if let Some(ref store) = self.live_stream_store {
+                if let Some(resp) = cdn_ingest::http_handler::serve_live_request(
+                    store,
+                    path,
+                    session.req_header().uri.query(),
+                )
+                .await
+                {
+                    let mut header = ResponseHeader::build(resp.status, None)?;
+                    header.insert_header("Content-Type", resp.content_type)?;
+                    header.insert_header("Cache-Control", resp.cache_control)?;
+                    header.insert_header("Access-Control-Allow-Origin", "*")?;
+                    session
+                        .write_response_header(Box::new(header), false)
+                        .await?;
+                    session.write_response_body(Some(resp.body), true).await?;
+                    return Ok(true);
+                }
+            }
         }
 
         // ── 4. Internal endpoints (IP restricted) ──

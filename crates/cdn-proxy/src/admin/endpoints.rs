@@ -29,6 +29,8 @@ pub struct AdminState {
     pub warm_tracker: Arc<WarmTaskTracker>,
     /// Active log backend name for status endpoint.
     pub log_backend_name: String,
+    /// Live stream store for ingest admin endpoints (None if ingest disabled).
+    pub live_stream_store: Option<Arc<cdn_ingest::LiveStreamStore>>,
 }
 
 /// Constant-time byte comparison (re-export from cdn-common).

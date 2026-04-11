@@ -621,6 +621,273 @@ fn get_cts_offset(ctts: &Option<Vec<mp4_parse::CttsEntry>>, sample_index: u32) -
 
 // ── LL-HLS partial segment generation ──
 
+// ── Live ingest fMP4 generation ──
+
+/// Generate an fMP4 init segment from live track info (for live ingest).
+pub fn generate_init_segment_from_live_tracks(
+    tracks: &[super::LiveTrackInfo],
+    timescale: u32,
+) -> Vec<u8> {
+    let mut output = Vec::new();
+
+    let ftyp = build_ftyp();
+    output.extend_from_slice(&ftyp);
+
+    let moov = build_live_init_moov(tracks, timescale);
+    output.extend_from_slice(&moov);
+
+    output
+}
+
+fn build_live_init_moov(tracks: &[super::LiveTrackInfo], timescale: u32) -> Vec<u8> {
+    let mut moov_content = Vec::new();
+
+    let mvhd = build_mvhd(timescale);
+    moov_content.extend_from_slice(&mvhd);
+
+    for track in tracks {
+        let trak = build_live_init_trak(track);
+        moov_content.extend_from_slice(&trak);
+    }
+
+    let mut mvex_content = Vec::new();
+    for track in tracks {
+        let trex = build_trex(track.track_id);
+        mvex_content.extend_from_slice(&trex);
+    }
+    let mvex = make_box(b"mvex", &mvex_content);
+    moov_content.extend_from_slice(&mvex);
+
+    make_box(b"moov", &moov_content)
+}
+
+fn build_live_init_trak(track: &super::LiveTrackInfo) -> Vec<u8> {
+    let mut trak_content = Vec::new();
+
+    // tkhd
+    let tkhd = build_live_tkhd(track);
+    trak_content.extend_from_slice(&tkhd);
+
+    // mdia
+    let mdia = build_live_init_mdia(track);
+    trak_content.extend_from_slice(&mdia);
+
+    make_box(b"trak", &trak_content)
+}
+
+fn build_live_tkhd(track: &super::LiveTrackInfo) -> Vec<u8> {
+    let mut content = Vec::new();
+    write_u32_be(&mut content, 0x00000003); // flags: enabled + in_movie
+    write_u32_be(&mut content, 0); // creation_time
+    write_u32_be(&mut content, 0); // modification_time
+    write_u32_be(&mut content, track.track_id);
+    write_u32_be(&mut content, 0); // reserved
+    write_u32_be(&mut content, 0); // duration=0 for fragmented
+    content.extend_from_slice(&[0u8; 8]); // reserved
+    write_u16_be(&mut content, 0); // layer
+    write_u16_be(&mut content, 0); // alternate_group
+    let volume: u16 = if track.track_type == super::LiveTrackType::Audio {
+        0x0100
+    } else {
+        0
+    };
+    write_u16_be(&mut content, volume);
+    write_u16_be(&mut content, 0); // reserved
+    let identity_matrix: [u32; 9] = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
+    for val in &identity_matrix {
+        write_u32_be(&mut content, *val);
+    }
+    let w = track.width.unwrap_or(0) << 16;
+    let h = track.height.unwrap_or(0) << 16;
+    write_u32_be(&mut content, w);
+    write_u32_be(&mut content, h);
+    make_box(b"tkhd", &content)
+}
+
+fn build_live_init_mdia(track: &super::LiveTrackInfo) -> Vec<u8> {
+    let mut mdia_content = Vec::new();
+
+    let mdhd = build_mdhd(track.timescale);
+    mdia_content.extend_from_slice(&mdhd);
+
+    let handler = match track.track_type {
+        super::LiveTrackType::Video => b"vide",
+        super::LiveTrackType::Audio => b"soun",
+    };
+    let hdlr = build_hdlr(handler);
+    mdia_content.extend_from_slice(&hdlr);
+
+    let minf = build_live_init_minf(track);
+    mdia_content.extend_from_slice(&minf);
+
+    make_box(b"mdia", &mdia_content)
+}
+
+fn build_live_init_minf(track: &super::LiveTrackInfo) -> Vec<u8> {
+    let mut minf_content = Vec::new();
+
+    match track.track_type {
+        super::LiveTrackType::Video => {
+            let mut vmhd = Vec::new();
+            write_u32_be(&mut vmhd, 0x00000001);
+            write_u16_be(&mut vmhd, 0);
+            vmhd.extend_from_slice(&[0u8; 6]);
+            let vmhd_box = make_box(b"vmhd", &vmhd);
+            minf_content.extend_from_slice(&vmhd_box);
+        }
+        super::LiveTrackType::Audio => {
+            let mut smhd = Vec::new();
+            write_u32_be(&mut smhd, 0);
+            write_u16_be(&mut smhd, 0);
+            write_u16_be(&mut smhd, 0);
+            let smhd_box = make_box(b"smhd", &smhd);
+            minf_content.extend_from_slice(&smhd_box);
+        }
+    }
+
+    // dinf + dref
+    let mut dref_content = Vec::new();
+    write_u32_be(&mut dref_content, 0);
+    write_u32_be(&mut dref_content, 1);
+    let mut url_content = Vec::new();
+    write_u32_be(&mut url_content, 0x00000001);
+    let url_box = make_box(b"url ", &url_content);
+    dref_content.extend_from_slice(&url_box);
+    let dref = make_box(b"dref", &dref_content);
+    let dinf = make_box(b"dinf", &dref);
+    minf_content.extend_from_slice(&dinf);
+
+    // stbl with pre-built stsd data
+    let stbl = build_live_init_stbl(&track.stsd_data);
+    minf_content.extend_from_slice(&stbl);
+
+    make_box(b"minf", &minf_content)
+}
+
+fn build_live_init_stbl(stsd_data: &[u8]) -> Vec<u8> {
+    let mut stbl_content = Vec::new();
+
+    if !stsd_data.is_empty() {
+        let stsd = make_box(b"stsd", stsd_data);
+        stbl_content.extend_from_slice(&stsd);
+    } else {
+        let mut stsd = Vec::new();
+        write_u32_be(&mut stsd, 0);
+        write_u32_be(&mut stsd, 0);
+        let stsd_box = make_box(b"stsd", &stsd);
+        stbl_content.extend_from_slice(&stsd_box);
+    }
+
+    // Empty stts
+    let mut stts = Vec::new();
+    write_u32_be(&mut stts, 0);
+    write_u32_be(&mut stts, 0);
+    stbl_content.extend_from_slice(&make_box(b"stts", &stts));
+
+    // Empty stsc
+    let mut stsc = Vec::new();
+    write_u32_be(&mut stsc, 0);
+    write_u32_be(&mut stsc, 0);
+    stbl_content.extend_from_slice(&make_box(b"stsc", &stsc));
+
+    // Empty stsz
+    let mut stsz = Vec::new();
+    write_u32_be(&mut stsz, 0);
+    write_u32_be(&mut stsz, 0);
+    write_u32_be(&mut stsz, 0);
+    stbl_content.extend_from_slice(&make_box(b"stsz", &stsz));
+
+    // Empty stco
+    let mut stco = Vec::new();
+    write_u32_be(&mut stco, 0);
+    write_u32_be(&mut stco, 0);
+    stbl_content.extend_from_slice(&make_box(b"stco", &stco));
+
+    make_box(b"stbl", &stbl_content)
+}
+
+/// Generate an fMP4 media segment from raw sample data (for live ingest).
+pub fn generate_live_media_segment(
+    sequence_number: u32,
+    tracks: &[super::LiveTrackData],
+) -> Vec<u8> {
+    let mut moof_content = Vec::new();
+    let mut mdat_payload = Vec::new();
+
+    let mfhd = build_mfhd(sequence_number);
+    moof_content.extend_from_slice(&mfhd);
+
+    // First pass: build traf per track with placeholder offset, collect mdat
+    for track_data in tracks {
+        let (traf, track_mdat) = build_live_traf(track_data, 0);
+        moof_content.extend_from_slice(&traf);
+        mdat_payload.extend_from_slice(&track_mdat);
+    }
+
+    let moof = make_box(b"moof", &moof_content);
+    let moof_size = moof.len() as u32;
+
+    // Second pass: rebuild with correct data_offset
+    let mut final_moof_content = Vec::new();
+    final_moof_content.extend_from_slice(&build_mfhd(sequence_number));
+
+    let mut track_data_offset = 0u32;
+    for track_data in tracks {
+        let (traf, _) = build_live_traf(track_data, moof_size + 8 + track_data_offset);
+        let (_, track_mdat) = build_live_traf(track_data, 0);
+        track_data_offset += track_mdat.len() as u32;
+        final_moof_content.extend_from_slice(&traf);
+    }
+
+    let final_moof = make_box(b"moof", &final_moof_content);
+    let mdat = make_box(b"mdat", &mdat_payload);
+
+    let mut output = Vec::with_capacity(final_moof.len() + mdat.len());
+    output.extend_from_slice(&final_moof);
+    output.extend_from_slice(&mdat);
+    output
+}
+
+fn build_live_traf(track_data: &super::LiveTrackData, data_offset: u32) -> (Vec<u8>, Vec<u8>) {
+    if track_data.samples.is_empty() {
+        let mut traf_content = Vec::new();
+        let tfhd = build_tfhd(track_data.track_id);
+        traf_content.extend_from_slice(&tfhd);
+        return (make_box(b"traf", &traf_content), Vec::new());
+    }
+
+    let mut traf_content = Vec::new();
+
+    let tfhd = build_tfhd(track_data.track_id);
+    traf_content.extend_from_slice(&tfhd);
+
+    let tfdt = build_tfdt(track_data.base_dts);
+    traf_content.extend_from_slice(&tfdt);
+
+    let mut sample_entries = Vec::new();
+    let mut mdat_payload = Vec::new();
+
+    for sample in &track_data.samples {
+        let flags = if sample.is_sync {
+            0x02000000
+        } else {
+            0x01010000
+        };
+        sample_entries.push((
+            sample.duration,
+            sample.data.len() as u32,
+            flags,
+            sample.cts_offset,
+        ));
+        mdat_payload.extend_from_slice(&sample.data);
+    }
+
+    let trun = build_trun(&sample_entries, data_offset);
+    traf_content.extend_from_slice(&trun);
+
+    (make_box(b"traf", &traf_content), mdat_payload)
+}
+
 /// Calculate the sample range for a specific part within a segment.
 ///
 /// Parts subdivide a segment by `part_duration`. Unlike full segments,

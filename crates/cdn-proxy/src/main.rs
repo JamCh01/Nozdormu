@@ -291,6 +291,7 @@ fn main() {
         purge_tracker: Arc::clone(&purge_tracker),
         warm_tracker: Arc::new(cdn_proxy::admin::warm::WarmTaskTracker::new()),
         log_backend_name,
+        live_stream_store: None, // set after ingest services are created
     });
 
     // Active health check probes (clone refs before CdnProxy takes ownership)
@@ -336,6 +337,60 @@ fn main() {
         node_config.ssl.renewal_days,
     ));
 
+    // ── 6.5 Live ingest services (optional) ──
+    let live_stream_store: Option<Arc<cdn_ingest::LiveStreamStore>> =
+        if let Some(ref ingest_value) = cdn_config.ingest {
+            match serde_json::from_value::<cdn_ingest::IngestConfig>(ingest_value.clone()) {
+                Ok(ingest_config) if ingest_config.enabled => {
+                    let store = Arc::new(cdn_ingest::LiveStreamStore::new(
+                        ingest_config.max_segments,
+                        ingest_config.max_streams,
+                    ));
+
+                    if ingest_config.rtmp.enabled {
+                        let addr: std::net::SocketAddr = ingest_config
+                            .rtmp
+                            .listen
+                            .parse()
+                            .expect("invalid RTMP listen address");
+                        let svc = cdn_ingest::rtmp::RtmpIngestService::new(
+                            addr,
+                            Arc::clone(&store),
+                            ingest_config.clone(),
+                        );
+                        let rtmp_bg = background_service("rtmp ingest", svc);
+                        server.add_service(rtmp_bg);
+                        log::info!("[Ingest] RTMP listening on {}", ingest_config.rtmp.listen);
+                    }
+
+                    if ingest_config.srt.enabled {
+                        let addr: std::net::SocketAddr = ingest_config
+                            .srt
+                            .listen
+                            .parse()
+                            .expect("invalid SRT listen address");
+                        let svc = cdn_ingest::srt::SrtIngestService::new(
+                            addr,
+                            Arc::clone(&store),
+                            ingest_config.clone(),
+                        );
+                        let srt_bg = background_service("srt ingest", svc);
+                        server.add_service(srt_bg);
+                        log::info!("[Ingest] SRT listening on {}", ingest_config.srt.listen);
+                    }
+
+                    Some(store)
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    log::warn!("[Ingest] failed to parse ingest config: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
     let cdn_proxy = CdnProxy {
         lb,
         sni,
@@ -360,6 +415,7 @@ fn main() {
             .as_ref()
             .map(|b| b.channels().clone())
             .unwrap_or_default(),
+        live_stream_store: live_stream_store.clone(),
     };
 
     let mut proxy_service = http_proxy_service(&server.configuration, cdn_proxy);

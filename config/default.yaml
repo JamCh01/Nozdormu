@@ -35,3 +35,26 @@ cdn:
 
   # Load balancing algorithm: round_robin | ketama
   load_balancing: round_robin
+
+  # Live ingest (RTMP/SRT push streaming → HLS/LL-HLS output)
+  # ingest:
+  #   enabled: true
+  #   rtmp:
+  #     enabled: true
+  #     listen: "0.0.0.0:1935"
+  #   srt:
+  #     enabled: true
+  #     listen: "0.0.0.0:9000"
+  #     latency_ms: 120
+  #   segment_duration: 6.0
+  #   ll_hls:
+  #     enabled: true
+  #     part_duration: 0.33
+  #   max_segments: 10
+  #   max_streams: 100
+  #   stream_timeout_secs: 30
+  #   stream_keys:
+  #     - key: "your_secret_key"
+  #       app: "live"
+  #       stream_name: "stream1"
+  #       enabled: true

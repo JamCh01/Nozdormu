@@ -16,6 +16,7 @@
   - **边缘鉴权（URL 签名）** -- Type A/B/C 三种 URL 签名模式（HMAC-SHA256），防盗链，可配置过期时间
   - **动态转封装** -- 源站存储 MP4，边缘实时转封装为 HLS（fMP4 分片 + m3u8 播放列表），支持 `?format=hls` 触发；**LL-HLS（Low-Latency HLS）**：`#EXT-X-PART` 部分分片（可配置 part_duration，默认 0.5s）、`#EXT-X-PART-INF`、`#EXT-X-SERVER-CONTROL`（CAN-BLOCK-RELOAD、PART-HOLD-BACK），`INDEPENDENT=YES` 关键帧标记，per-site 可配置启用
   - **智能预取** -- 解析 HLS/DASH 清单文件，异步预取后续分片到缓存，原子去重，响应体大小限制（256MB），提升命中率
+- **直播接入（RTMP/SRT）** -- 内置 RTMP（TCP:1935）和 SRT（UDP:9000）推流接入，接收编码器推流后实时分段为 HLS/LL-HLS，通过 HTTP 代理分发；Stream Key 推流认证；内存环形缓冲区（保留最近 N 个分片，可配置）；LL-HLS 部分分片 + 阻塞播放列表重载（`_HLS_msn`/`_HLS_part`）；`#EXT-X-PRELOAD-HINT` 预加载提示；H.264 SPS/PPS 解析 + AAC AudioSpecificConfig 解析 → fMP4 init segment 自动生成；Prometheus 指标（连接数/帧数/分片数/活跃流数）
 - **多协议支持** -- HTTP、WebSocket、SSE、gRPC（原生 + gRPC-Web），按协议独立超时和头部处理
 - **负载均衡** -- 加权轮询、一致性哈希（Ketama 哈希环，源站增减仅 1/N 重映射）、随机、最少连接（Least Connections）；**自适应权重**（滑动窗口 P99 延迟 + 错误率自动调权，per-site 可配置）；主动健康检查（HTTP/TCP 探测）+ 被动健康追踪，自动故障转移到备用源站
 - **SSL/TLS** -- 多提供商 ACME（Let's Encrypt、ZeroSSL、Buypass、Google），完整 ACME v2 协议流程（HTTP-01 挑战、CSR 生成、证书下载），账户凭证 Redis 持久化，自动续期（后台服务 + Redis 分布式锁），EAB 支持；下游 TLS 监听器（动态证书选择，SNI 精确/通配符/默认回退），TLS 1.3 0-RTT Early Data（非幂等方法自动拒绝 425，上游 `Early-Data: 1` 头部 RFC 8470）
@@ -35,6 +36,7 @@ crates/
   cdn-log           日志多后端：LogSink trait、Redis/Kafka/RabbitMQ/NATS/Pulsar 五种 sink、4 阶段计时
   cdn-image         图片优化：裁剪/缩放、格式转换、质量调整、Accept 协商
   cdn-streaming     视频流优化：URL 签名鉴权、MP4→HLS 动态转封装、HLS/DASH 智能预取
+  cdn-ingest        直播接入：RTMP/SRT 推流 → HLS/LL-HLS 输出、内存环形缓冲、Stream Key 认证
   cdn-middleware     WAF 引擎（IP/GeoIP + 请求体检查）、CC 引擎、重定向引擎、头部规则
   cdn-proxy          主程序：Pingora 代理、负载均衡、DNS、SSL、主动健康探测、管理 API
 ```
@@ -45,6 +47,7 @@ crates/
 客户端 -> Pingora 监听器（HTTP + 可选 TLS，动态证书选择，0-RTT Early Data）
   -> 健康检查/ACME（短路返回）
   -> 管理 API（/_admin/ 路径，Bearer Token 认证，短路返回）
+  -> 直播流服务（/live/ 路径，从内存环形缓冲返回 HLS 播放列表/分片，短路返回）
   -> 站点路由（域名 -> SiteConfig，精确/通配符匹配）
   -> 客户端 IP 提取（XFF 防伪造，可配置信任代理）
   -> 0-RTT 重放保护（非幂等方法返回 425 Too Early）
@@ -195,6 +198,18 @@ curl "http://localhost:6188/video.mp4?format=hls&segment=0&part=0" -o part0.m4s
 
 # URL 签名鉴权（Type B 示例）
 # 签名 URL: /video.mp4?auth_key={timestamp}-{rand}-{uid}-{hmac_hash}
+
+# 直播推流（需配置 ingest 并启用 RTMP/SRT）
+# RTMP 推流
+ffmpeg -re -i input.mp4 -c copy -f flv rtmp://localhost:1935/live/your_secret_key
+# SRT 推流
+ffmpeg -re -i input.mp4 -c copy -f mpegts "srt://localhost:9000?streamid=live/your_secret_key"
+# 播放直播流（HLS）
+curl http://localhost:6188/live/live/stream1.m3u8
+# 获取直播 init 分片
+curl http://localhost:6188/live/live/stream1/init.mp4
+# 获取直播媒体分片
+curl http://localhost:6188/live/live/stream1/seg0.mp4
 ```
 
 ## 配置
@@ -227,6 +242,7 @@ Nozdormu 使用三层配置系统，优先级：**CLI 参数 > etcd > 默认值*
 | `{prefix}/global/logging` | 日志后端（Redis/Kafka/RabbitMQ/NATS/Pulsar）、8 通道独立路由 |
 | `{prefix}/global/compression` | 压缩算法、级别、最小大小、MIME 类型 |
 | `{prefix}/global/image_optimization` | 图片格式、质量、最大尺寸、可优化类型 |
+| `{prefix}/global/ingest` | 直播接入：RTMP/SRT 监听地址、分片参数、LL-HLS、Stream Key 列表 |
 
 示例：为整个集群设置 Redis 配置：
 
@@ -368,11 +384,13 @@ curl -X POST http://localhost:6188/_admin/reload \
 | 6188 | HTTP 代理 + 管理 API（`/_admin/` 路径，Bearer Token 认证） |
 | 6189 | HTTPS/TLS 代理（可选，需配置 `tls_listen` + 证书） |
 | 6190 | Prometheus 指标 |
+| 1935 | RTMP 推流接入（可选，需配置 `ingest.rtmp.enabled`） |
+| 9000 | SRT 推流接入（可选，需配置 `ingest.srt.enabled`） |
 
 ## 开发
 
 ```bash
-# 运行单元/集成测试（509 个测试）
+# 运行单元/集成测试（554 个测试）
 cargo test
 
 # 代码检查

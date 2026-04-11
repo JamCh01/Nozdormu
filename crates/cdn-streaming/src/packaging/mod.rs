@@ -4,6 +4,58 @@ pub mod mp4_parse;
 
 use cdn_common::LlHlsConfig;
 
+// ── Live ingest types (used by cdn-ingest crate) ──
+
+/// Track info for building a live fMP4 init segment.
+pub struct LiveTrackInfo {
+    pub track_id: u32,
+    pub track_type: LiveTrackType,
+    pub timescale: u32,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+    /// Pre-built stsd box data (version + entry_count + sample entry).
+    pub stsd_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveTrackType {
+    Video,
+    Audio,
+}
+
+/// Track data for building a live fMP4 media segment.
+pub struct LiveTrackData {
+    pub track_id: u32,
+    pub base_dts: u64,
+    pub samples: Vec<LiveSample>,
+}
+
+/// A single sample (frame) for live fMP4 generation.
+pub struct LiveSample {
+    pub data: Vec<u8>,
+    pub duration: u32,
+    pub is_sync: bool,
+    pub cts_offset: i32,
+}
+
+/// Generate an fMP4 init segment from live track info.
+///
+/// Unlike `fmp4_gen::generate_init_segment()` which takes `Mp4Metadata` from a parsed MP4,
+/// this takes pre-built `LiveTrackInfo` with stsd_data synthesized from codec config.
+pub fn generate_init_segment_from_tracks(tracks: &[LiveTrackInfo], timescale: u32) -> Vec<u8> {
+    fmp4_gen::generate_init_segment_from_live_tracks(tracks, timescale)
+}
+
+/// Generate an fMP4 media segment from raw sample data (for live ingest).
+///
+/// Unlike `fmp4_gen::generate_media_segment()` which reads from MP4 file bytes,
+/// this takes pre-collected sample data directly.
+pub fn generate_live_media_segment(sequence_number: u32, tracks: &[LiveTrackData]) -> Vec<u8> {
+    fmp4_gen::generate_live_media_segment(sequence_number, tracks)
+}
+
 /// What type of packaging sub-resource is being requested.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PackagingRequest {

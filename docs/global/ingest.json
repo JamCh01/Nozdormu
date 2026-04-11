@@ -1,0 +1,43 @@
+{
+    "_comment": "Live ingest configuration (node-level, in default.yaml under cdn.ingest)",
+    "_comment2": "Enables RTMP and SRT push streaming with HLS/LL-HLS output",
+
+    "ingest": {
+        "enabled": true,
+
+        "rtmp": {
+            "_comment": "RTMP listener for push streaming (TCP)",
+            "enabled": true,
+            "listen": "0.0.0.0:1935"
+        },
+
+        "srt": {
+            "_comment": "SRT listener for push streaming (UDP)",
+            "enabled": true,
+            "listen": "0.0.0.0:9000",
+            "latency_ms": 120
+        },
+
+        "segment_duration": 6.0,
+
+        "ll_hls": {
+            "_comment": "Low-Latency HLS partial segments for live streams",
+            "enabled": true,
+            "part_duration": 0.33
+        },
+
+        "max_segments": 10,
+        "max_streams": 100,
+        "stream_timeout_secs": 30,
+
+        "stream_keys": [
+            {
+                "_comment": "Each key maps a secret to an app/stream_name pair",
+                "key": "your_secret_stream_key",
+                "app": "live",
+                "stream_name": "stream1",
+                "enabled": true
+            }
+        ]
+    }
+}

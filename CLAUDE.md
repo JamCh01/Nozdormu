@@ -10,7 +10,7 @@ Nozdormu is a high-performance CDN reverse proxy built on Cloudflare's Pingora f
 # Build (requires Rust 1.84+, OpenSSL dev headers)
 cargo build
 
-# Run all tests (509 unit/integration tests across 8 crates)
+# Run all tests (554 unit/integration tests across 9 crates)
 cargo test
 
 # Run tests for a specific crate
@@ -44,18 +44,19 @@ crates/
   cdn-cache/        Cache strategy, key generation, OSS/S3 storage, bulk purge (ListObjectsV2 + Multi-Object Delete)
   cdn-log/          Multi-backend multi-channel logging: LogSink trait, Redis/Kafka/RabbitMQ/NATS/Pulsar sinks, 8 independent channels, 4-phase timing
   cdn-image/        Image optimization: params parsing, Accept negotiation, decode/resize/encode (image + fast_image_resize)
-  cdn-streaming/    Video streaming: URL signing auth (Type A/B/C), MP4→HLS dynamic packaging, HLS/DASH prefetch
+  cdn-streaming/    Video streaming: URL signing auth (Type A/B/C), MP4→HLS dynamic packaging, HLS/DASH prefetch, live fMP4 generation API
+  cdn-ingest/       Live ingest: RTMP/SRT push streaming → HLS/LL-HLS output, in-memory ring buffer, stream key auth
   cdn-middleware/    WAF (IP/GeoIP + body inspection), CC rate limiting, redirects, header manipulation
   cdn-proxy/        Main binary — Pingora ProxyHttp, balancer, DNS, SSL, active health probes, admin API
 ```
 
-Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-log` / `cdn-image` / `cdn-streaming` / `cdn-middleware` ← `cdn-proxy`
+Dependency flow: `cdn-common` ← `cdn-config` ← `cdn-cache` / `cdn-log` / `cdn-image` / `cdn-streaming` / `cdn-middleware` ← `cdn-ingest` ← `cdn-proxy`
 
 ## Configuration Examples
 
 Detailed JSON examples with inline documentation for every config option:
 
-- **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization
+- **Global configs** (`docs/global/`): redis, redis_standalone, security, balancer, proxy, cache, ssl, logging, compression, image_optimization, ingest
 - **Site configs** (`docs/site/`): basic, origins, lb_round_robin, lb_ip_hash, lb_random, lb_least_conn, lb_backup_failover, waf, waf_log_mode, waf_body, cc, cache, protocol, redirect, headers, compression, image_optimization, range, streaming_auth, streaming_packaging, streaming_prefetch, ssl, full
 
 ## Architecture Essentials
@@ -85,6 +86,7 @@ Detailed JSON examples with inline documentation for every config option:
   - **Edge Auth (URL Signing)**: Type A (`/{timestamp}/{hash}/{path}`), Type B (`?auth_key={ts}-{rand}-{uid}-{hash}`), Type C (`/{hash}/{timestamp}/{path}`). HMAC-SHA256 with constant-time comparison. Validated in `request_filter` before cache lookup — unauthorized requests never touch cache. Auth tokens stripped from upstream path. Per-site `StreamingAuthConfig { auth_type, auth_key, expire_time }`.
   - **Dynamic Packaging (MP4→HLS)**: In-house MP4 atom parser (moov/trak/stbl), generates fMP4 init segments + media segments + m3u8 playlists. Triggered by `?format=hls` or `Accept: application/vnd.apple.mpegurl`. Full MP4 buffered in `response_body_filter` (same pattern as image optimization). Each HLS variant (manifest/init/segment N) gets a distinct cache key. Mutually exclusive with image optimization (image wins) and Range (packaging wins). Per-site `DynamicPackagingConfig { segment_duration, max_mp4_size, ll_hls }`. Invalid sample offsets are handled gracefully (size zeroed in trun to maintain ISO BMFF consistency). **LL-HLS (Low-Latency HLS)**: When `ll_hls.enabled`, playlist uses `#EXT-X-VERSION:9` with `#EXT-X-PART` tags (partial segments), `#EXT-X-PART-INF` (PART-TARGET), `#EXT-X-SERVER-CONTROL` (CAN-BLOCK-RELOAD, PART-HOLD-BACK=3×PART-TARGET). Each full segment is subdivided into parts by `part_duration` (default 0.5s). Parts are standalone fMP4 fragments (moof+mdat) sharing the same init segment. `INDEPENDENT=YES` on parts starting with keyframes. Part URLs: `?format=hls&segment=N&part=P`. `_HLS_msn`/`_HLS_part` query params recognized and stripped (VOD: immediate response). `LlHlsConfig { enabled, part_duration }` per-site, disabled by default.
   - **Smart Prefetching**: Parses HLS m3u8 and DASH mpd manifests from response bodies, extracts segment URLs, fires background `tokio::spawn` tasks to fetch next N segments from origin via reqwest and store in cache. Shadow-copies manifest body (doesn't consume — client receives at wire speed). Per-site concurrency via `Semaphore`, deduplication via `DashMap` `entry()` API (atomic check-and-insert). Response body capped at 256 MB to prevent OOM from malicious origins. Per-site `PrefetchConfig { prefetch_count, concurrency_limit }`.
+- **Live ingest (RTMP/SRT)**: `cdn-ingest` crate provides RTMP (TCP:1935) and SRT (UDP) push streaming. Two Pingora `BackgroundService` instances (`RtmpIngestService`, `SrtIngestService`) run inside the cdn-proxy process. RTMP uses `rml_rtmp` crate for protocol handling (handshake, chunk stream, AMF commands); SRT uses `srt-tokio` (pure Rust). Both demux incoming streams to extract H.264 video (via FLV tags for RTMP, MPEG-TS for SRT) and AAC audio frames. `LiveSegmenter` accumulates frames and produces fMP4 segments (reusing `cdn-streaming`'s box-writing helpers via `generate_live_media_segment()`). Segments stored in `LiveStreamStore` — a `DashMap<String, Arc<RwLock<LiveStream>>>` with per-stream ring buffer (`VecDeque<LiveSegment>`, configurable max_segments). LL-HLS partial segments (`#EXT-X-PART`) supported with blocking playlist reload (`_HLS_msn`/`_HLS_part` → `oneshot` waiters). HTTP serving via `/live/{app}/{stream}.m3u8` path interception in `request_filter` (before site routing). Stream key authentication maps `rtmp://host/{app}/{stream_key}` to configured `StreamKeyEntry` list. Node-level config in `CdnConfig.ingest` (YAML). Prometheus metrics: `cdn_ingest_connections_total`, `cdn_ingest_frames_total`, `cdn_ingest_segments_total`, `cdn_ingest_active_streams`.
 - **Request body inspection**: Two-phase body checking in `waf/body.rs`. Phase 1: Content-Length pre-check in `request_filter` (early 413 before body transfer). Phase 2: `request_body_filter` buffers first 8KB for magic-bytes detection via `infer` crate (~200 file types, zero deps), enforces size limit incrementally per chunk. Supports allowed/blocked MIME type lists with wildcard matching (`image/*`), content-type mismatch detection (declared vs detected at type-family level). Per-site `BodyInspectionConfig { max_body_size, allowed_content_types, blocked_content_types, inspect_methods }`.
 - **TLS listener & 0-RTT Early Data**: Optional downstream TLS listener via `tls_listen` config field. Uses Pingora's `TlsSettings::with_callbacks()` + `TlsAccept` trait for dynamic certificate provisioning — `CdnTlsAccept` in `ssl/tls_accept.rs` looks up certs via `CertManager` (SNI → exact → wildcard → default). TLS 1.3 0-RTT enabled via `set_max_early_data()` on `SslAcceptorBuilder` when `early_data: true`. After handshake, `SSL_get_early_data_status()` (FFI) stores result in `SslDigest.extension` as `TlsHandshakeData`. In `request_filter`, non-idempotent methods (POST/PUT/DELETE/PATCH) on 0-RTT connections are rejected with 425 Too Early. Idempotent 0-RTT requests get `Early-Data: 1` upstream header per RFC 8470. Prometheus counter `cdn_early_data_requests_total` tracks accepted/rejected. Both TCP and TLS listeners share the same `CdnProxy` instance.
 - **ACME certificate issuance**: Complete ACME v2 (RFC 8555) protocol flow in `ssl/acme.rs` using `instant-acme` crate. Multi-provider rotation (Let's Encrypt → ZeroSSL → Buypass → Google) with EAB support. Account credentials persisted in Redis (`nozdormu:acme:account:{provider}:{email_hash}`, TTL 365d) for reuse across nodes. HTTP-01 challenge tokens stored in `ChallengeStore` (in-memory DashMap), served at `/.well-known/acme-challenge/` before WAF/routing. CSR generated via `rcgen` (ECDSA P-256). Polling with exponential backoff (2s→10s, 300s timeout). Challenge tokens cleaned up after validation or on error.
@@ -160,6 +162,7 @@ Critical production requirements:
 - Streaming prefetch tests use manifest parsing (HLS m3u8 line-based, DASH mpd XML), URL resolution (relative/absolute), and origin URL construction
 - Body inspection tests use magic bytes (JPEG/PNG/PDF/GIF/ZIP signatures), Content-Length size checks, wildcard MIME matching, content-type mismatch detection, and edge cases (empty body, unknown type, disabled config)
 - Config history tests use serde roundtrips (ConfigVersionSnapshot, VersionMeta, ConfigChangeType), version key formatting (zero-padded), snapshot-to-summary conversion, and change type equality
+- Ingest tests: config serde roundtrips, stream store (create/get/remove/ring buffer eviction/max streams/waiter notification), stream key auth (valid/invalid/disabled), H.264 SPS parsing (AVCC + Annex-B, stsd synthesis), AAC AudioSpecificConfig parsing (44100/48000 Hz, stsd synthesis), live HLS manifest generation (standard/LL-HLS/ENDLIST/PRELOAD-HINT), blocking playlist reload (already available/wait+notify/timeout), HTTP handler URL parsing (segment/part filenames, HLS params), segmenter frame push
 
 ### E2E Tests
 

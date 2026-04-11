@@ -1,0 +1,26 @@
+[package]
+name = "cdn-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cdn-common = { workspace = true }
+cdn-streaming = { workspace = true }
+pingora = { workspace = true }
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+log = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+prometheus = { workspace = true }
+once_cell = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+rml_rtmp = { workspace = true }
+srt-tokio = { workspace = true }
+h264-reader = { workspace = true }
+mpeg2ts-reader = { workspace = true }
+futures-util = "0.3"

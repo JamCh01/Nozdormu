@@ -8,6 +8,7 @@ members = [
     "crates/cdn-image",
     "crates/cdn-streaming",
     "crates/cdn-log",
+    "crates/cdn-ingest",
     "crates/cdn-proxy",
 ]
 
@@ -114,6 +115,13 @@ cdn-log = { path = "crates/cdn-log" }
 cdn-image = { path = "crates/cdn-image" }
 cdn-middleware = { path = "crates/cdn-middleware" }
 cdn-streaming = { path = "crates/cdn-streaming" }
+cdn-ingest = { path = "crates/cdn-ingest" }
+
+# RTMP/SRT ingest
+rml_rtmp = "0.8"
+srt-tokio = "0.4"
+h264-reader = "0.8"
+mpeg2ts-reader = "0.18"
 
 # Messaging
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
