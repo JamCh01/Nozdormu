@@ -39,6 +39,12 @@
       "timeout": 3,
       "healthy_threshold": 2,
       "unhealthy_threshold": 2
+    },
+    "adaptive_weight": {
+      "enabled": false,
+      "window_size": 100,
+      "latency_threshold_ms": 500.0,
+      "error_threshold": 0.1
     }
   }
 }
