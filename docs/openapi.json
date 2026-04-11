@@ -687,8 +687,90 @@
           "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
+    },
+    "/webhook/events": {
+      "get": {
+        "operationId": "webhookListEvents",
+        "summary": "List recent webhook delivery attempts",
+        "description": "Returns recent webhook delivery attempts across all sites, sorted by creation time (most recent first). Entries are auto-evicted after 1 hour.",
+        "tags": ["Webhook"],
+        "responses": {
+          "200": {
+            "description": "List of webhook delivery attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deliveries": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/WebhookDeliveryStatus" }
+                    }
+                  },
+                  "required": ["deliveries"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/webhook/test/{site_id}": {
+      "post": {
+        "operationId": "webhookTest",
+        "summary": "Send a test webhook event",
+        "description": "Dispatches a test webhook event to all URLs configured in the specified site's webhook config. Returns 400 if webhooks are not enabled for the site.",
+        "tags": ["Webhook"],
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Site ID to send the test webhook for"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test webhook event dispatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "message": { "type": "string" },
+                    "site_id": { "type": "string" },
+                    "urls": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "required": ["status", "message", "site_id", "urls"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Webhooks not configured for this site",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
     }
   },
+  "components": {
     "securitySchemes": {
       "BearerAuth": {
         "type": "http",
@@ -867,6 +949,22 @@
           "config": { "type": "object", "description": "The full SiteConfig JSON at this version" }
         },
         "required": ["version", "site_id", "timestamp", "etcd_revision", "change_type", "config"]
+      },
+      "WebhookDeliveryStatus": {
+        "type": "object",
+        "description": "Status of a single webhook delivery attempt",
+        "properties": {
+          "delivery_id": { "type": "string", "format": "uuid", "description": "Unique delivery ID" },
+          "event_type": { "type": "string", "description": "Event type (cert_renewal_success, cert_renewal_failure, health_status_change, cache_purge_completed, test)" },
+          "url": { "type": "string", "format": "uri", "description": "Target webhook URL" },
+          "status": { "type": "string", "enum": ["pending", "delivered", "failed"], "description": "Delivery state" },
+          "attempts": { "type": "integer", "description": "Number of delivery attempts made" },
+          "last_status_code": { "type": ["integer", "null"], "description": "HTTP status code from last attempt" },
+          "last_error": { "type": ["string", "null"], "description": "Error message from last failed attempt" },
+          "created_at": { "type": "integer", "format": "int64", "description": "Unix epoch seconds when the delivery was created" },
+          "completed_at": { "type": ["integer", "null"], "format": "int64", "description": "Unix epoch seconds when the delivery completed (success or final failure)" }
+        },
+        "required": ["delivery_id", "event_type", "url", "status", "attempts", "created_at"]
       }
     }
   },
@@ -876,6 +974,8 @@
     { "name": "Sites", "description": "Site configuration queries" },
     { "name": "Upstream", "description": "Upstream origin health management" },
     { "name": "CC", "description": "CC rate limiting status" },
-    { "name": "Cache", "description": "Cache purge, warm, and management operations" }
+    { "name": "Cache", "description": "Cache purge, warm, and management operations" },
+    { "name": "Logging", "description": "Log backend status" },
+    { "name": "Webhook", "description": "Webhook notification delivery status and testing" }
   ]
 }

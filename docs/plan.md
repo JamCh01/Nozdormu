@@ -595,3 +595,38 @@ Phase 0 (基础设施)
 
 Phase 3-5 (WAF/CC/跳转) 可并行开发。
 Phase 7-11 在 Phase 2 完成后可并行开发。
+
+---
+
+## Post-Migration: 已完成的增强功能
+
+> Phase 0-13 迁移完成后，以下增强功能已实现。
+
+| # | 功能 | 状态 | 说明 |
+|---|------|------|------|
+| 1 | Stale-While-Revalidate | ✅ | SWR 指令解析 + 后台异步回源刷新 |
+| 2 | Request Coalescing | ✅ | DashMap + Notify，同一 cache key 并发 miss 仅第一个回源 |
+| 3 | Cache Tags / Surrogate Keys | ✅ | Redis SET 反向索引 + 按 tag 批量清除 |
+| 4 | 缓存预热 API | ✅ | POST /_admin/cache/warm + 进度追踪 |
+| 5 | TLS 1.3 0-RTT Early Data | ✅ | 非幂等方法拒绝 425 + Early-Data 头部 |
+| 6 | Least Connections LB | ✅ | AtomicU32 per-origin + 权重 tie-break |
+| 7 | 一致性哈希 LB | ✅ | Ketama 哈希环 + 加权虚拟节点 |
+| 8 | 自适应权重 | ✅ | P99 延迟 + 错误率 + 线性惩罚 [0.1, 1.0] |
+| 9 | 多后端多通道日志 | ✅ | 5 后端 × 8 通道 + feature flags |
+| 10 | 配置版本管理与回滚 | ✅ | etcd CAS + 50 快照 + 一键回滚 |
+| 11 | LL-HLS 低延迟 | ✅ | #EXT-X-PART + PART-INF + SERVER-CONTROL |
+| 12 | RTMP/SRT 直播接入 | ✅ | cdn-ingest crate：RTMP + SRT → HLS/LL-HLS |
+| 13 | 自定义错误页 | ✅ | per-site per-status-code 内联 HTML |
+| 14 | Webhook 通知 | ✅ | per-site 配置，证书续期/健康变更/缓存清除事件，HMAC 签名 + 重试 |
+
+### 待实现
+
+| # | 功能 | 优先级 | 说明 |
+|---|------|--------|------|
+| 1 | OWASP 基础规则集 | 高 | SQL 注入/XSS/Path Traversal 检测 |
+| 2 | HTTP/3 (QUIC) | 高 | 依赖 Pingora 上游 QUIC 支持 |
+| 3 | Bot 管理 | 中 | UA 分类 + 行为检测 |
+| 4 | OpenTelemetry 分布式追踪 | 中 | traceparent/tracestate 传播 |
+| 5 | DASH 动态封装 | 中 | MPD manifest + CMAF segments |
+| 6 | API 版本化 (v1) | 中 | /_admin/ → /_admin/v1/ |
+| 7 | Tiered Cache | 中 | 分层缓存，边缘 miss 回区域中心 |
